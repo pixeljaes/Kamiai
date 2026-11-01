@@ -101,7 +101,7 @@ function viewHome(sid) {
         <div class="rooms">
           <div class="sec"><span>ROOMS</span>${owner ? `<button class="iconbtn" id="addroom" aria-label="Add a room" style="width:32px;height:32px">${I.plus}</button>` : ""}</div>
           ${adding ? `<form id="rf" style="display:flex;gap:8px;padding:0 4px 8px"><label for="rn" style="position:absolute;left:-9999px">Room name</label><input class="field" id="rn" placeholder="new-room" maxlength="24" style="height:44px;font-size:15px"><button class="btn small" type="submit">Add</button></form>` : ""}
-          ${rooms.map((r) => `<a class="room" href="#/chat/${cur.id}/${r.id}">${I.hash}<span>${esc(r.name)}</span></a>`).join("")}
+          ${rooms.map((r) => `<a class="room" href="#/chat/${cur.id}/${r.id}">${I.hash}<span>${esc(r.name)}</span>${unread[r.id] ? `<i class="ub">${unread[r.id]}</i>` : ""}</a>`).join("")}
         </div>
         <div class="userbar"><div class="av" style="background:${colorOf(user.uid)}">${esc(initials(user.name))}</div>
           <div class="who"><b>${esc(user.name)}</b><span>Online</span></div>
@@ -117,6 +117,8 @@ function viewHome(sid) {
       try { await db.createRoom(cur.id, n); adding = false; } catch (x) { toast(x.message); }
     });
   };
+  onUnread = () => { if (!adding) draw(); };
+  on(() => { onUnread = null; });
   on(db.watchMyServers(user.uid, (s) => { servers = s; draw(); }));
   // rooms for the selected server; re-subscribe when we know which one
   if (sid) on(db.watchRooms(sid, (r) => { rooms = r; draw(); }));
@@ -124,6 +126,7 @@ function viewHome(sid) {
 
 /* ---------- Chat ---------- */
 function viewChat(sid, rid) {
+  clearUnread(rid);
   let room = null, server = null, blocked = {}, list = [];
   mount(`<div class="screen chat">
     <div class="top"><a class="iconbtn" href="#/s/${sid}" aria-label="Back to rooms">${I.back}</a>
@@ -255,6 +258,7 @@ function viewProfile() {
     <div class="stack"><div><div style="font-size:26px;font-weight:800">${esc(user.name)}</div><div class="muted" style="font-size:14px;font-weight:600;margin-top:2px">${esc(user.email || "")}</div></div>
       <form class="form" id="f"><div><label class="label" for="nm">Display name</label><input class="field" id="nm" value="${esc(user.name)}" maxlength="30"></div>
         <p class="err" id="err" role="alert"></p><button class="btn" type="submit">Save name</button></form>
+      <button class="btn ghost" id="snd" type="button">Message sounds: ON 🔔</button>
       <div><span class="cap">BLOCKED PEOPLE</span><div id="bl" style="display:flex;flex-direction:column;gap:8px;margin-top:10px"></div></div>
       <button class="btn ghost" id="lo" type="button">Log out</button>
       <p class="fine" style="margin:0">Kamiai · ${db.mode === "online" ? "Online" : "Demo mode (this phone only)"}</p></div></div>`);
@@ -264,6 +268,10 @@ function viewProfile() {
     try { await db.updateName(user.uid, n); user.name = n; toast("Name saved ✅"); viewProfile(); } catch (x) { document.getElementById("err").textContent = x.message; }
   });
   document.getElementById("lo").addEventListener("click", async () => { await db.logOut(); });
+  const snd = document.getElementById("snd");
+  const sndDraw = () => { snd.textContent = ntfOn ? "Message sounds: ON 🔔" : "Message sounds: OFF 🔕"; };
+  sndDraw();
+  snd.addEventListener("click", () => { ntfOn = !ntfOn; safe("kamiai-sound", ntfOn ? "on" : "off"); sndDraw(); if (ntfOn) ding(); });
   on(db.watchBlocked(user.uid, (b) => {
     const el = document.getElementById("bl"); if (!el) return;
     const ids = Object.keys(b || {});
@@ -272,6 +280,65 @@ function viewProfile() {
   }));
 }
 
+/* ---------- Notifications (while the app is open) ---------- */
+let ntfStop = null, ntfOwner = null, unread = {}, onUnread = null, ntfBlocked = {}, ntfOn = safe("kamiai-sound") !== "off";
+let audioCtx = null;
+function ding() {
+  if (!ntfOn) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = audioCtx.currentTime;
+    [880, 1318].forEach((f, i) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = "sine"; o.frequency.value = f; o.connect(g); g.connect(audioCtx.destination);
+      g.gain.setValueAtTime(0.0001, t + i * 0.12); g.gain.exponentialRampToValueAtTime(0.25, t + i * 0.12 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.12 + 0.3);
+      o.start(t + i * 0.12); o.stop(t + i * 0.12 + 0.32);
+    });
+  } catch (e) {}
+  try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
+}
+function totalUnread() { return Object.values(unread).reduce((a, b) => a + b, 0); }
+function setBadge() {
+  const n = totalUnread();
+  document.title = n ? `(${n}) Kamiai` : "Kamiai";
+  try { if (n && navigator.setAppBadge) navigator.setAppBadge(n); else if (navigator.clearAppBadge) navigator.clearAppBadge(); } catch (e) {}
+  if (onUnread) onUnread();
+}
+function clearUnread(rid) { if (unread[rid]) { delete unread[rid]; setBadge(); } }
+function viewing(sid, rid) { return document.visibilityState === "visible" && location.hash === `#/chat/${sid}/${rid}`; }
+function startNotify() {
+  if (ntfOwner === user.uid) return;
+  stopNotify();
+  ntfOwner = user.uid;
+  const stops = [], rooms = new Set(), servers = new Set();
+  stops.push(db.watchBlocked(user.uid, (b) => { ntfBlocked = b || {}; }));
+  stops.push(db.watchMyServers(user.uid, (list) => {
+    list.forEach((sv) => {
+      if (servers.has(sv.id)) return; servers.add(sv.id);
+      stops.push(db.watchRooms(sv.id, (rs) => {
+        rs.forEach((r) => {
+          if (rooms.has(r.id)) return; rooms.add(r.id);
+          let seen = null;
+          stops.push(db.watchMessages(sv.id, r.id, (ms) => {
+            if (!seen) { seen = new Set(ms.map((m) => m.id)); return; }
+            const fresh = ms.filter((m) => !seen.has(m.id));
+            fresh.forEach((m) => seen.add(m.id));
+            fresh.filter((m) => m.uid !== user.uid && !ntfBlocked[m.uid]).forEach((m) => {
+              if (viewing(sv.id, r.id)) return;
+              unread[r.id] = (unread[r.id] || 0) + 1;
+              setBadge(); ding();
+              toast(`${m.name} in #${r.name}: ${String(m.text).slice(0, 60)}`);
+            });
+          }));
+        });
+      }));
+    });
+  }));
+  ntfStop = () => stops.forEach((x) => { try { x && x(); } catch (e) {} });
+}
+function stopNotify() { if (ntfStop) ntfStop(); ntfStop = null; ntfOwner = null; unread = {}; setBadge(); }
+document.addEventListener("visibilitychange", () => { const m = location.hash.match(/^#\/chat\/[^/]+\/([^/]+)/); if (document.visibilityState === "visible" && m) clearUnread(m[1]); });
+
 /* ---------- Router ---------- */
 async function route() {
   clean();
@@ -279,7 +346,8 @@ async function route() {
   const h = location.hash.replace(/^#/, "") || "/";
   const p = h.split("/").filter(Boolean);
   if (p[0] === "join" && p[1]) safe("kamiai-pending", p[1]);
-  if (!user) { viewLogin(); return; }
+  if (!user) { stopNotify(); viewLogin(); return; }
+  startNotify();
   const pending = safe("kamiai-pending");
   if (pending) {
     safe("kamiai-pending", "");
