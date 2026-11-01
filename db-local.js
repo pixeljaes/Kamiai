@@ -1,7 +1,7 @@
 // Demo mode: everything is saved on this phone only (no internet needed).
 const KEY = "kamiai-demo-v1";
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } };
-const base = () => Object.assign({ accounts: [], servers: [], rooms: [], messages: [], session: null, blocks: {}, reports: [] }, load());
+const base = () => Object.assign({ accounts: [], servers: [], rooms: [], messages: [], session: null, blocks: {}, reports: [], dms: [], dmMessages: [] }, load());
 let state = base();
 const listeners = new Set();
 const save = () => { localStorage.setItem(KEY, JSON.stringify(state)); fire(); };
@@ -53,6 +53,24 @@ export const db = {
   watchRooms(sid, cb) { return sub(() => cb(state.rooms.filter((r) => r.serverId === sid).sort((a, b) => a.createdAt - b.createdAt))); },
   async createRoom(sid, name) { state.rooms.push({ id: uid(), serverId: sid, name, createdAt: Date.now() }); save(); },
   watchMessages(sid, rid, cb) { return sub(() => cb(state.messages.filter((m) => m.roomId === rid).sort((a, b) => a.createdAt - b.createdAt).slice(-100))); },
+  dmId: (a, b) => [a, b].sort().join("_"),
+  async openDM(u, uName, other, otherName) {
+    const id = [u, other].sort().join("_");
+    if (!state.dms.find((d) => d.id === id)) { state.dms.push({ id, members: [u, other].sort(), names: { [u]: uName, [other]: otherName }, status: "pending", requestedBy: u, updatedAt: Date.now() }); save(); }
+    return id;
+  },
+  async acceptDM(id) { const d = state.dms.find((x) => x.id === id); if (d) { d.status = "accepted"; d.updatedAt = Date.now(); save(); } },
+  async declineDM(id) { state.dms = state.dms.filter((x) => x.id !== id); state.dmMessages = state.dmMessages.filter((m) => m.dmId !== id); save(); },
+  watchDM(id, cb) { return sub(() => cb(state.dms.find((d) => d.id === id) || null)); },
+  watchDMs(u, cb) { return sub(() => cb(state.dms.filter((d) => d.members.includes(u)).sort((a, b) => b.updatedAt - a.updatedAt))); },
+  watchDMMessages(id, cb) { return sub(() => cb(state.dmMessages.filter((m) => m.dmId === id).sort((a, b) => a.createdAt - b.createdAt).slice(-100))); },
+  async sendDM(id, m) {
+    const dd = state.dms.find((x) => x.id === id); if (!dd || dd.status !== "accepted") throw new Error("They haven't accepted yet.");
+    state.dmMessages.push({ id: uid(), dmId: id, uid: m.uid, name: m.name, text: m.text, createdAt: Date.now() });
+    const d = state.dms.find((x) => x.id === id); if (d) { d.updatedAt = Date.now(); d.last = m.text.slice(0, 80); }
+    save();
+  },
+  async getNames(uids) { const o = {}; uids.forEach((id) => { const a = state.accounts.find((x) => x.uid === id); o[id] = a ? a.name : "Someone"; }); return o; },
   watchBlocked(u, cb) { return sub(() => cb(state.blocks[u] || {})); },
   async blockUser(u, other, name) { state.blocks[u] = Object.assign({}, state.blocks[u], { [other]: name || "Someone" }); save(); },
   async unblockUser(u, other) { const b = Object.assign({}, state.blocks[u]); delete b[other]; state.blocks[u] = b; save(); },

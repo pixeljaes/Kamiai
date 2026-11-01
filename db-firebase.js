@@ -2,7 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
   signInWithPopup, GoogleAuthProvider, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, onSnapshot, query, where,
-  orderBy, limit, arrayUnion, serverTimestamp, writeBatch, deleteField } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  orderBy, limit, arrayUnion, serverTimestamp, writeBatch, deleteField, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./config.js";
 
 const app = initializeApp(firebaseConfig);
@@ -75,6 +75,38 @@ export const db = {
     return onSnapshot(q, { includeMetadataChanges: false }, (s) => {
       cb(s.docs.map((d) => ({ id: d.id, ...d.data({ serverTimestamps: "estimate" }), createdAt: ms(d.data({ serverTimestamps: "estimate" }).createdAt) })).reverse());
     }, () => cb([]));
+  },
+  dmId: (a, b) => [a, b].sort().join("_"),
+  openDM: wrap(async (u, uName, other, otherName) => {
+    const id = [u, other].sort().join("_");
+    const ex = await getDoc(doc(fs, "dms", id));
+    if (!ex.exists()) await setDoc(doc(fs, "dms", id), { members: [u, other].sort(), names: { [u]: uName, [other]: otherName }, status: "pending", requestedBy: u, updatedAt: serverTimestamp() });
+    return id;
+  }),
+  acceptDM: wrap((id) => updateDoc(doc(fs, "dms", id), { status: "accepted", updatedAt: serverTimestamp() })),
+  declineDM: wrap((id) => deleteDoc(doc(fs, "dms", id))),
+  watchDM(id, cb) {
+    return onSnapshot(doc(fs, "dms", id), (d) => cb(d.exists() ? { id: d.id, ...d.data() } : null), () => cb(null));
+  },
+  watchDMs(u, cb) {
+    return onSnapshot(query(collection(fs, "dms"), where("members", "array-contains", u)), (s) => {
+      cb(s.docs.map((d) => ({ id: d.id, ...d.data(), updatedAt: ms(d.data().updatedAt) })).sort((a, b) => b.updatedAt - a.updatedAt));
+    }, () => cb([]));
+  },
+  watchDMMessages(id, cb) {
+    const q = query(collection(fs, "dms", id, "messages"), orderBy("createdAt", "desc"), limit(100));
+    return onSnapshot(q, (s) => {
+      cb(s.docs.map((d) => ({ id: d.id, ...d.data({ serverTimestamps: "estimate" }), createdAt: ms(d.data({ serverTimestamps: "estimate" }).createdAt) })).reverse());
+    }, () => cb([]));
+  },
+  sendDM: wrap(async (id, m) => {
+    await addDoc(collection(fs, "dms", id, "messages"), { uid: m.uid, name: m.name, text: m.text, createdAt: serverTimestamp() });
+    await setDoc(doc(fs, "dms", id), { updatedAt: serverTimestamp(), last: m.text.slice(0, 80) }, { merge: true });
+  }),
+  async getNames(uids) {
+    const out = {};
+    await Promise.all(uids.map(async (id) => { try { const d = await getDoc(doc(fs, "users", id)); out[id] = (d.exists() && d.data().name) || "Someone"; } catch (e) { out[id] = "Someone"; } }));
+    return out;
   },
   watchBlocked(u, cb) {
     return onSnapshot(doc(fs, "users", u), (d) => cb((d.exists() && d.data().blocked) || {}), () => cb({}));
