@@ -1,7 +1,7 @@
 // Demo mode: everything is saved on this phone only (no internet needed).
 const KEY = "kamiai-demo-v1";
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } };
-const base = () => Object.assign({ accounts: [], servers: [], rooms: [], messages: [], session: null }, load());
+const base = () => Object.assign({ accounts: [], servers: [], rooms: [], messages: [], session: null, blocks: {}, reports: [] }, load());
 let state = base();
 const listeners = new Set();
 const save = () => { localStorage.setItem(KEY, JSON.stringify(state)); fire(); };
@@ -53,5 +53,9 @@ export const db = {
   watchRooms(sid, cb) { return sub(() => cb(state.rooms.filter((r) => r.serverId === sid).sort((a, b) => a.createdAt - b.createdAt))); },
   async createRoom(sid, name) { state.rooms.push({ id: uid(), serverId: sid, name, createdAt: Date.now() }); save(); },
   watchMessages(sid, rid, cb) { return sub(() => cb(state.messages.filter((m) => m.roomId === rid).sort((a, b) => a.createdAt - b.createdAt).slice(-100))); },
+  watchBlocked(u, cb) { return sub(() => cb(state.blocks[u] || {})); },
+  async blockUser(u, other, name) { state.blocks[u] = Object.assign({}, state.blocks[u], { [other]: name || "Someone" }); save(); },
+  async unblockUser(u, other) { const b = Object.assign({}, state.blocks[u]); delete b[other]; state.blocks[u] = b; save(); },
+  async reportMessage(r) { state.reports.push(Object.assign({}, r, { createdAt: Date.now() })); save(); },
   async sendMessage(sid, rid, m) { state.messages.push({ id: uid(), roomId: rid, serverId: sid, uid: m.uid, name: m.name, text: m.text, createdAt: Date.now() }); save(); }
 };

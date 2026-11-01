@@ -29,6 +29,7 @@ const I = {
   sms: '<svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg>',
   mail: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>',
   more: '<svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5M5 14v6h14v-6"/></svg>',
+  dots: '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>',
   star: '<svg viewBox="0 0 24 24" style="fill:#111"><path d="M2 5.2L8 6.4h8l6-1.2-.7 2.4H2.7z"/><path d="M4.4 8.6h15.2v1.4H4.4zM5.2 12.2h13.6v1.5H5.2zM10.9 10h2.2v2.2h-2.2zM6.2 8.6h1.6L7.3 20H5.5zM16.2 8.6h1.6l.7 11.4h-1.8z"/></svg>'
 };
 
@@ -123,7 +124,7 @@ function viewHome(sid) {
 
 /* ---------- Chat ---------- */
 function viewChat(sid, rid) {
-  let room = null, server = null;
+  let room = null, server = null, blocked = {}, list = [];
   mount(`<div class="screen chat">
     <div class="top"><a class="iconbtn" href="#/s/${sid}" aria-label="Back to rooms">${I.back}</a>
       <div class="tt"><b id="rt">#</b><span id="st"></span></div></div>
@@ -137,22 +138,32 @@ function viewChat(sid, rid) {
   on(db.watchServer(sid, (s) => { server = s; if (s === null && db.mode === "online") { /* not a member */ } head(); }));
   on(db.watchRooms(sid, (rs) => { room = rs.find((r) => r.id === rid) || null; head(); }));
   const box = document.getElementById("msgs");
-  const fmtT = (t) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  on(db.watchMessages(sid, rid, (ms) => {
+  const draw = () => {
+    const ms = list.filter((m) => !blocked[m.uid]);
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120 || !box.childElementCount;
     if (!ms.length) { box.innerHTML = '<div class="none">No messages yet.<br>Say hi and start the chat! 👋</div>'; return; }
     let html = "", lastDay = "", prev = null;
-    for (const m of ms) {
+    ms.forEach((m, i) => {
       const d = new Date(m.createdAt), day = d.toDateString();
       if (day !== lastDay) { html += `<div class="day"><i></i><span>${esc(d.toDateString() === new Date().toDateString() ? "Today" : d.toLocaleDateString([], { month: "short", day: "numeric" }))}</span><i></i></div>`; lastDay = day; prev = null; }
       const cont = prev && prev.uid === m.uid && m.createdAt - prev.createdAt < 5 * 60000;
-      html += `<div class="msg ${cont ? "cont" : ""}">${cont ? '<div class="sp"></div>' : `<div class="av" style="background:${colorOf(m.uid)}">${esc(initials(m.name))}</div>`}
-        <div class="body">${cont ? "" : `<div class="meta"><b style="color:${m.uid === user.uid ? "var(--accent2)" : "#fff"}">${esc(m.name)}</b><time>${fmtT(m.createdAt)}</time></div>`}<p>${esc(m.text)}</p></div></div>`;
+      const mine = m.uid === user.uid;
+      html += `<div class="msg ${cont ? "cont" : ""} ${mine ? "mine" : ""}" data-i="${i}">${cont ? '<div class="sp"></div>' : `<div class="av" style="background:${colorOf(m.uid)}">${esc(initials(m.name))}</div>`}
+        <div class="body">${cont ? "" : `<div class="meta"><b style="color:${mine ? "var(--accent2)" : "#fff"}">${esc(m.name)}</b><time>${fmtT(m.createdAt)}</time></div>`}<p>${esc(m.text)}</p></div>${mine ? "" : `<span class="dots" aria-hidden="true">${I.dots}</span>`}</div>`;
       prev = m;
-    }
+    });
     box.innerHTML = html;
+    box.__ms = ms;
     if (nearBottom) box.scrollTop = box.scrollHeight;
-  }));
+  };
+  const fmtT = (t) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  on(db.watchBlocked(user.uid, (b) => { blocked = b || {}; draw(); }));
+  on(db.watchMessages(sid, rid, (ms) => { list = ms; draw(); }));
+  box.addEventListener("click", (e) => {
+    const el = e.target.closest(".msg"); if (!el || el.classList.contains("mine")) return;
+    const m = (box.__ms || [])[+el.dataset.i]; if (!m) return;
+    openSheet(m, sid, rid);
+  });
   const input = document.getElementById("mi");
   document.getElementById("cf").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -160,6 +171,28 @@ function viewChat(sid, rid) {
     input.value = ""; input.focus();
     try { await db.sendMessage(sid, rid, { uid: user.uid, name: user.name, text }); setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50); }
     catch (x) { toast(x.message); input.value = text; }
+  });
+}
+
+/* ---------- Report / block sheet ---------- */
+function openSheet(m, sid, rid) {
+  const bg = document.createElement("div");
+  bg.className = "sheetbg";
+  bg.innerHTML = `<div class="sheet" role="dialog" aria-label="Message options"><h3>${esc(m.name)}</h3><p class="quote">${esc(m.text)}</p>
+    <button id="rp">Report this message</button><button id="bl" class="danger">Block ${esc(m.name)}</button><button id="cx" class="plain">Cancel</button></div>`;
+  $app.appendChild(bg);
+  const close = () => bg.remove();
+  bg.addEventListener("click", (e) => { if (e.target === bg) close(); });
+  bg.querySelector("#cx").addEventListener("click", close);
+  bg.querySelector("#rp").addEventListener("click", async () => {
+    try { await db.reportMessage({ reporterId: user.uid, messageUid: m.uid, messageName: m.name, text: m.text, messageId: m.id || "", serverId: sid, roomId: rid }); toast("Thanks, we'll look at it ✅"); }
+    catch (x) { toast(x.message); }
+    close();
+  });
+  bg.querySelector("#bl").addEventListener("click", async () => {
+    try { await db.blockUser(user.uid, m.uid, m.name); toast(m.name + " is blocked. Their messages are hidden."); }
+    catch (x) { toast(x.message); }
+    close();
   });
 }
 
@@ -222,6 +255,7 @@ function viewProfile() {
     <div class="stack"><div><div style="font-size:26px;font-weight:800">${esc(user.name)}</div><div class="muted" style="font-size:14px;font-weight:600;margin-top:2px">${esc(user.email || "")}</div></div>
       <form class="form" id="f"><div><label class="label" for="nm">Display name</label><input class="field" id="nm" value="${esc(user.name)}" maxlength="30"></div>
         <p class="err" id="err" role="alert"></p><button class="btn" type="submit">Save name</button></form>
+      <div><span class="cap">BLOCKED PEOPLE</span><div id="bl" style="display:flex;flex-direction:column;gap:8px;margin-top:10px"></div></div>
       <button class="btn ghost" id="lo" type="button">Log out</button>
       <p class="fine" style="margin:0">Kamiai · ${db.mode === "online" ? "Online" : "Demo mode (this phone only)"}</p></div></div>`);
   document.getElementById("f").addEventListener("submit", async (e) => {
@@ -230,6 +264,12 @@ function viewProfile() {
     try { await db.updateName(user.uid, n); user.name = n; toast("Name saved ✅"); viewProfile(); } catch (x) { document.getElementById("err").textContent = x.message; }
   });
   document.getElementById("lo").addEventListener("click", async () => { await db.logOut(); });
+  on(db.watchBlocked(user.uid, (b) => {
+    const el = document.getElementById("bl"); if (!el) return;
+    const ids = Object.keys(b || {});
+    el.innerHTML = ids.length ? ids.map((id) => `<div class="brow"><b>${esc(b[id])}</b><button data-u="${esc(id)}">Unblock</button></div>`).join("") : '<span class="muted" style="font-size:14px">Nobody. Tap a message in a chat to block someone.</span>';
+    el.querySelectorAll("button").forEach((x) => x.addEventListener("click", async () => { try { await db.unblockUser(user.uid, x.dataset.u); toast("Unblocked ✅"); } catch (e) { toast(e.message); } }));
+  }));
 }
 
 /* ---------- Router ---------- */

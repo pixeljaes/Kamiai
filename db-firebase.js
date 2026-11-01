@@ -2,7 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword,
   signInWithPopup, GoogleAuthProvider, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, onSnapshot, query, where,
-  orderBy, limit, arrayUnion, serverTimestamp, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  orderBy, limit, arrayUnion, serverTimestamp, writeBatch, deleteField } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./config.js";
 
 const app = initializeApp(firebaseConfig);
@@ -76,6 +76,12 @@ export const db = {
       cb(s.docs.map((d) => ({ id: d.id, ...d.data({ serverTimestamps: "estimate" }), createdAt: ms(d.data({ serverTimestamps: "estimate" }).createdAt) })).reverse());
     }, () => cb([]));
   },
+  watchBlocked(u, cb) {
+    return onSnapshot(doc(fs, "users", u), (d) => cb((d.exists() && d.data().blocked) || {}), () => cb({}));
+  },
+  blockUser: wrap((u, other, name) => setDoc(doc(fs, "users", u), { blocked: { [other]: name || "Someone" } }, { merge: true })),
+  unblockUser: wrap((u, other) => setDoc(doc(fs, "users", u), { blocked: { [other]: deleteField() } }, { merge: true })),
+  reportMessage: wrap((r) => addDoc(collection(fs, "reports"), { ...r, createdAt: serverTimestamp() })),
   sendMessage: wrap((sid, rid, m) => addDoc(collection(fs, "servers", sid, "rooms", rid, "messages"), {
     uid: m.uid, name: m.name, text: m.text, createdAt: serverTimestamp()
   }))
