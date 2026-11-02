@@ -104,6 +104,16 @@ export const db = {
     await addDoc(collection(fs, "dms", id, "messages"), { uid: m.uid, name: m.name, text: m.text, createdAt: serverTimestamp() });
     await setDoc(doc(fs, "dms", id), { updatedAt: serverTimestamp(), last: m.text.slice(0, 80) }, { merge: true });
   }),
+  async getProfiles(uids) {
+    const out = {};
+    await Promise.all(uids.map(async (id) => {
+      try { const d = await getDoc(doc(fs, "users", id)); const x = d.exists() ? d.data() : {};
+        out[id] = { name: x.name || "Someone", photo: x.photo || "", color: x.color || "", bio: x.bio || "", status: x.status || "online" }; }
+      catch (e) { out[id] = { name: "Someone", photo: "", color: "", bio: "", status: "online" }; }
+    }));
+    return out;
+  },
+  saveProfile: wrap((u, f) => setDoc(doc(fs, "users", u), f, { merge: true })),
   async getNames(uids) {
     const out = {};
     await Promise.all(uids.map(async (id) => { try { const d = await getDoc(doc(fs, "users", id)); out[id] = (d.exists() && d.data().name) || "Someone"; } catch (e) { out[id] = "Someone"; } }));

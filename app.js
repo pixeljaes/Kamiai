@@ -76,12 +76,39 @@ function viewLogin() {
 
 /* ---------- shared helpers ---------- */
 const nameCache = {};
-async function namesFor(uids) {
-  const need = uids.filter((u) => !nameCache[u]);
-  if (need.length) Object.assign(nameCache, await db.getNames(need));
-  return nameCache;
+const PROF = {};
+const STATUS = { online: ["Online", "#3BCB6B"], idle: ["Idle", "#FFC46B"], dnd: ["Do not disturb", "#FF6B6B"], invisible: ["Invisible", "#80808A"] };
+const SWATCHES = ["#FF6A1A", "#FF4D6D", "#B79CFF", "#6EC1FF", "#5CE17A", "#FFC46B", "#FF8AD8", "#8A8A94"];
+let profBusy = false;
+async function loadProfiles(uids) {
+  const need = [...new Set(uids)].filter((u) => u && !PROF[u]);
+  if (!need.length) return false;
+  try { const got = await db.getProfiles(need); need.forEach((u) => { PROF[u] = got[u] || {}; if (got[u] && got[u].name) nameCache[u] = got[u].name; }); }
+  catch (e) { return false; }
+  return true;
 }
-const avatar = (uid, name, size = 40) => `<span class="av c" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.4)}px;background:${colorOf(uid)}">${esc(initials(name))}</span>`;
+async function namesFor(uids) { await loadProfiles(uids); return nameCache; }
+const stOf = (uid) => (PROF[uid] && PROF[uid].status) || "online";
+const colOf = (uid) => (PROF[uid] && PROF[uid].color) || colorOf(uid);
+const avatar = (uid, name, size = 40, dot = false) => {
+  const ph = PROF[uid] && PROF[uid].photo;
+  const st = stOf(uid), sc = (STATUS[st] || STATUS.online)[1];
+  return `<span class="av c has${dot ? " wd" : ""}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.4)}px;background:${ph ? `#2b2d31 url('${ph}') center/cover` : colOf(uid)}">${ph ? "" : esc(initials(name))}${dot ? `<i class="sdot" style="background:${sc};width:${Math.max(10, Math.round(size * 0.28))}px;height:${Math.max(10, Math.round(size * 0.28))}px"></i>` : ""}</span>`;
+};
+const stLabel = (uid, self) => { const st = stOf(uid); return st === "invisible" && !self ? "Offline" : (STATUS[st] || STATUS.online)[0]; };
+function resizePhoto(file, size = 160) {
+  return new Promise((ok, no) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const c = document.createElement("canvas"); c.width = c.height = size;
+      const k = Math.min(img.width, img.height), sx = (img.width - k) / 2, sy = (img.height - k) / 2;
+      c.getContext("2d").drawImage(img, sx, sy, k, k, 0, 0, size, size);
+      URL.revokeObjectURL(url); ok(c.toDataURL("image/jpeg", 0.82));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); no(new Error("Couldn't open that picture.")); };
+    img.src = url;
+  });
+}
 const fmtT = (t) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 const dmUnread = () => Object.keys(unread).filter((k) => k.startsWith("dm:")).reduce((a, k) => a + unread[k], 0);
 function rail(servers, active) {
@@ -93,8 +120,8 @@ function rail(servers, active) {
     <a class="sv add" href="#/create" aria-label="Create a server">${I.plus}</a>
   </nav>`;
 }
-const userbar = () => `<div class="userbar"><a class="ubl" href="#/profile">${avatar(user.uid, user.name, 40)}
-  <div class="who"><b>${esc(user.name)}</b><span>Online</span></div></a>
+const userbar = () => `<div class="userbar"><a class="ubl" href="#/profile">${avatar(user.uid, user.name, 40, true)}
+  <div class="who"><b>${esc(user.name)}</b><span>${esc(stLabel(user.uid, true))}</span></div></a>
   <a class="iconbtn" href="#/profile" aria-label="Settings">${I.gear}</a></div>`;
 
 /* ---------- Home: servers, rooms ---------- */
@@ -168,7 +195,7 @@ function viewDMs() {
     document.querySelectorAll("[data-dec]").forEach((b) => b.addEventListener("click", async () => { try { await db.declineDM(b.dataset.dec); } catch (x) { toast(x.message); } }));
   };
   on(db.watchMyServers(user.uid, (s) => { servers = s; draw(); }));
-  on(db.watchDMs(user.uid, (l) => { dms = l; draw(); }));
+  on(db.watchDMs(user.uid, (l) => { dms = l; draw(); loadProfiles(l.map((d) => other(d))).then((ch) => { if (ch) draw(); }); }));
   onUnread = draw;
   on(() => { onUnread = null; });
 }
@@ -247,9 +274,10 @@ function viewChat(sid, rid) {
   const draw = () => {
     const ms = list.filter((m) => !blocked[m.uid]);
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120 || !box.childElementCount;
-    const intro = room ? `<div class="dmintro top"><span class="hashbig">#</span><h2>Welcome to #${esc(room.name)}!</h2><p>This is the start of the <b>#${esc(room.name)}</b> room.</p></div>` : "";
+    const intro = room ? `<div class="dmintro first"><span class="hashbig">#</span><h2>Welcome to #${esc(room.name)}!</h2><p>This is the start of the <b>#${esc(room.name)}</b> room.</p></div>` : "";
     box.innerHTML = intro + (ms.length ? msgsHtml(ms) : ""); box.__ms = ms;
     if (nearBottom) box.scrollTop = box.scrollHeight;
+    loadProfiles(ms.map((m) => m.uid)).then((ch) => { if (ch) draw(); });
   };
   on(db.watchBlocked(user.uid, (b) => { blocked = b || {}; draw(); }));
   on(db.watchMessages(sid, rid, (ms) => { list = ms; draw(); }));
@@ -273,7 +301,8 @@ function viewDM(id) {
   const head = () => {
     const o = otherId(), nm = otherName();
     document.getElementById("rt").textContent = o ? nm : "Message";
-    document.getElementById("ha").innerHTML = o ? avatar(o, nm, 34) : "";
+    document.getElementById("ha").innerHTML = o ? avatar(o, nm, 34, true) : "";
+    if (o) loadProfiles([o]).then((ch) => { if (ch) head(); });
     document.getElementById("mi").placeholder = o ? "Message @" + nm : "Message";
     const rq = document.getElementById("rq"), cf = document.getElementById("cf");
     if (dm && dm.status === "pending") {
@@ -297,6 +326,7 @@ function viewDM(id) {
     }
     box.innerHTML = msgsHtml(ms); box.__ms = ms;
     if (nearBottom) box.scrollTop = box.scrollHeight;
+    loadProfiles(ms.map((m) => m.uid)).then((ch) => { if (ch) draw(); });
   };
   on(db.watchDM(id, (d) => { dm = d; head(); }));
   on(db.watchBlocked(user.uid, (b) => { blocked = b || {}; draw(); }));
@@ -342,20 +372,25 @@ function openSheet(m, ctx) {
     s.close();
   });
 }
-function openProfile(p, ctx) {
-  const me = p.uid === user.uid, isBlocked = !!ntfBlocked[p.uid];
-  const s = sheet(`<div class="pbanner" style="background:${colorOf(p.uid)}"></div>
-    <div class="pav">${avatar(p.uid, p.name, 80)}</div>
-    <h3 class="pname">${esc(p.name)}</h3>
-    ${me ? '<p class="hint2">This is you</p>' : `<div class="pbtns">${ctx && ctx.kind === "dm" ? "" : '<button class="btn" id="pm" type="button">Message</button>'}
+async function openProfile(p, ctx) {
+  await loadProfiles([p.uid]);
+  const me = p.uid === user.uid, isBlocked = !!ntfBlocked[p.uid], pr = PROF[p.uid] || {};
+  const name = pr.name || p.name;
+  const s = sheet(`<div class="pbanner" style="background:${colOf(p.uid)}"></div>
+    <div class="pav">${avatar(p.uid, name, 80, true)}</div>
+    <h3 class="pname">${esc(name)}</h3>
+    <p class="pstat">${esc(stLabel(p.uid, me))}</p>
+    ${pr.bio ? `<div class="pbio"><span class="cap">ABOUT ME</span><p>${esc(pr.bio)}</p></div>` : ""}
+    ${me ? '<div class="pbtns"><a class="btn" href="#/profile" id="pe">Edit profile</a></div>' : `<div class="pbtns">${ctx && ctx.kind === "dm" ? "" : '<button class="btn" id="pm" type="button">Message</button>'}
       <button class="btn ghost" id="pb" type="button">${isBlocked ? "Unblock" : "Block"}</button></div>`}
     <button id="cx" class="plain">Close</button>`, "prof");
   s.q("#cx").addEventListener("click", s.close);
+  const pe = s.q("#pe"); if (pe) pe.addEventListener("click", s.close);
   const pm = s.q("#pm");
-  if (pm) pm.addEventListener("click", async () => { s.close(); try { await startDM(p); } catch (x) { toast(x.message); } });
+  if (pm) pm.addEventListener("click", async () => { s.close(); try { await startDM({ uid: p.uid, name }); } catch (x) { toast(x.message); } });
   const pb = s.q("#pb");
   if (pb) pb.addEventListener("click", async () => {
-    try { if (isBlocked) { await db.unblockUser(user.uid, p.uid); toast("Unblocked ✅"); } else { await db.blockUser(user.uid, p.uid, p.name); toast(p.name + " is blocked."); } } catch (x) { toast(x.message); }
+    try { if (isBlocked) { await db.unblockUser(user.uid, p.uid); toast("Unblocked ✅"); } else { await db.blockUser(user.uid, p.uid, name); toast(name + " is blocked."); } } catch (x) { toast(x.message); }
     s.close();
   });
 }
@@ -368,7 +403,7 @@ async function openMembers(server, ctx) {
   await namesFor(server.members);
   const ids = server.members.slice().sort((a, b) => (a === server.ownerId ? -1 : b === server.ownerId ? 1 : String(nameCache[a]).localeCompare(String(nameCache[b]))));
   const dl = bg.querySelector("#dl"); if (!dl) return;
-  dl.innerHTML = `<div class="sec"><span>MEMBERS — ${ids.length}</span></div>` + ids.map((u) => `<button class="mrow" data-u="${esc(u)}">${avatar(u, nameCache[u], 40)}<span class="mn">${esc(nameCache[u] || "Someone")}</span>${u === server.ownerId ? '<em class="own">Owner</em>' : ""}</button>`).join("");
+  dl.innerHTML = `<div class="sec"><span>MEMBERS — ${ids.length}</span></div>` + ids.map((u) => `<button class="mrow" data-u="${esc(u)}">${avatar(u, nameCache[u], 40, true)}<span class="mn">${esc(nameCache[u] || "Someone")}</span>${u === server.ownerId ? '<em class="own">Owner</em>' : ""}</button>`).join("");
   dl.querySelectorAll(".mrow").forEach((b) => b.addEventListener("click", () => { bg.remove(); openProfile({ uid: b.dataset.u, name: nameCache[b.dataset.u] || "Someone" }, ctx); }));
 }
 
@@ -426,29 +461,66 @@ function viewInvite(sid) {
 
 /* ---------- Profile ---------- */
 function viewProfile() {
-  mount(`<div class="screen scroll"><div class="profbanner"><a class="iconbtn" href="${safe("kamiai-last") ? "#/s/" + safe("kamiai-last") : "#/"}" aria-label="Back" style="position:absolute;left:8px;top:12px;background:rgba(14,14,16,.55)">${I.back.replace("<svg", '<svg style="stroke:#fff"')}</a></div>
-    <div class="profav" style="background:${colorOf(user.uid)}">${esc(initials(user.name))}</div>
-    <div class="stack"><div><div style="font-size:26px;font-weight:800">${esc(user.name)}</div><div class="muted" style="font-size:14px;font-weight:600;margin-top:2px">${esc(user.email || "")}</div></div>
-      <form class="form" id="f"><div><label class="label" for="nm">Display name</label><input class="field" id="nm" value="${esc(user.name)}" maxlength="30"></div>
-        <p class="err" id="err" role="alert"></p><button class="btn" type="submit">Save name</button></form>
+  const pr = PROF[user.uid] || {};
+  let photo = pr.photo || "", color = pr.color || "", status = pr.status || "online", photoChanged = false;
+  const back = safe("kamiai-last") ? "#/s/" + safe("kamiai-last") : "#/";
+  mount(`<div class="screen scroll"><div class="profbanner" id="pbn"><a class="iconbtn" href="${back}" aria-label="Back" style="position:absolute;left:8px;top:12px;background:rgba(14,14,16,.55)">${I.back.replace("<svg", '<svg style="stroke:#fff"')}</a></div>
+    <div class="profrow"><div class="profav2" id="pav"></div>
+      <div class="photobtns"><label class="pill" for="pf">Change picture</label><button class="pill ghost" id="prm" type="button">Remove</button></div>
+      <input type="file" id="pf" accept="image/*" hidden></div>
+    <div class="stack"><div><div style="font-size:26px;font-weight:800" id="pn">${esc(user.name)}</div><div class="muted" style="font-size:14px;font-weight:600;margin-top:2px">${esc(user.email || "")}</div></div>
+      <form class="form" id="f">
+        <div><label class="label" for="nm">Display name</label><input class="field" id="nm" value="${esc(user.name)}" maxlength="30"></div>
+        <div><label class="label" for="bio">About me</label><textarea class="field area" id="bio" maxlength="150" rows="3" placeholder="Tell people about yourself (favorite anime?)">${esc(pr.bio || "")}</textarea><div class="cnt2"><span id="bc">0</span>/150</div></div>
+        <div><span class="label">Status</span><div class="stseg" id="sts">${Object.keys(STATUS).map((k) => `<button type="button" data-s="${k}" aria-pressed="${k === status}"><i style="background:${STATUS[k][1]}"></i>${STATUS[k][0]}</button>`).join("")}</div></div>
+        <div><span class="label">Profile color</span><div class="swatches" id="sw">${SWATCHES.map((c) => `<button type="button" data-c="${c}" style="background:${c}" aria-label="Color ${c}" aria-pressed="${c === color}"></button>`).join("")}</div></div>
+        <p class="err" id="err" role="alert"></p><button class="btn" id="sv" type="submit">Save changes</button></form>
       <button class="btn ghost" id="snd" type="button">Message sounds: ON 🔔</button>
       <div><span class="cap">BLOCKED PEOPLE</span><div id="bl" style="display:flex;flex-direction:column;gap:8px;margin-top:10px"></div></div>
       <button class="btn ghost" id="lo" type="button">Log out</button>
       <p class="fine" style="margin:0">Kamiai · ${db.mode === "online" ? "Online" : "Demo mode (this phone only)"}</p></div></div>`);
-  document.getElementById("f").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const n = document.getElementById("nm").value.trim(); if (!n) return;
-    try { await db.updateName(user.uid, n); user.name = n; toast("Name saved ✅"); viewProfile(); } catch (x) { document.getElementById("err").textContent = x.message; }
+  const $ = (id) => document.getElementById(id);
+  const paint = () => {
+    $("pbn").style.background = color || colorOf(user.uid);
+    const ph = photo;
+    $("pav").innerHTML = `<span class="av c has bigav" style="width:92px;height:92px;font-size:34px;background:${ph ? `#2b2d31 url('${ph}') center/cover` : (color || colorOf(user.uid))}">${ph ? "" : esc(initials($("nm").value || user.name))}<i class="sdot" style="background:${STATUS[status][1]};width:24px;height:24px"></i></span>`;
+    $("prm").style.display = photo ? "" : "none";
+    $("sts").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.s === status)));
+    $("sw").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.c === color)));
+  };
+  const bio = $("bio"), bc = $("bc"); bc.textContent = bio.value.length; bio.addEventListener("input", () => { bc.textContent = bio.value.length; });
+  $("nm").addEventListener("input", paint);
+  $("sts").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { status = b.dataset.s; paint(); } });
+  $("sw").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) { color = color === b.dataset.c ? "" : b.dataset.c; paint(); } });
+  $("prm").addEventListener("click", () => { photo = ""; photoChanged = true; paint(); });
+  $("pf").addEventListener("change", async (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    try { photo = await resizePhoto(f); photoChanged = true; paint(); } catch (x) { toast(x.message); }
+    e.target.value = "";
   });
-  document.getElementById("lo").addEventListener("click", async () => { await db.logOut(); });
-  const snd = document.getElementById("snd");
+  paint();
+  $("f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const n = $("nm").value.trim(); if (!n) { $("err").textContent = "Please enter a name."; return; }
+    $("sv").disabled = true;
+    try {
+      if (n !== user.name) { await db.updateName(user.uid, n); user.name = n; nameCache[user.uid] = n; }
+      const f2 = { bio: bio.value.trim(), status, color, photo };
+      await db.saveProfile(user.uid, f2);
+      PROF[user.uid] = Object.assign({}, PROF[user.uid], { name: n }, f2);
+      toast("Profile saved ✅"); $("err").textContent = ""; $("pn").textContent = n;
+    } catch (x) { $("err").textContent = x.message; }
+    $("sv").disabled = false;
+  });
+  $("lo").addEventListener("click", async () => { await db.logOut(); });
+  const snd = $("snd");
   const sndDraw = () => { snd.textContent = ntfOn ? "Message sounds: ON 🔔" : "Message sounds: OFF 🔕"; };
   sndDraw();
   snd.addEventListener("click", () => { ntfOn = !ntfOn; safe("kamiai-sound", ntfOn ? "on" : "off"); sndDraw(); if (ntfOn) ding(); });
   on(db.watchBlocked(user.uid, (b) => {
-    const el = document.getElementById("bl"); if (!el) return;
+    const el = $("bl"); if (!el) return;
     const ids = Object.keys(b || {});
-    el.innerHTML = ids.length ? ids.map((id) => `<div class="brow"><b>${esc(b[id])}</b><button data-u="${esc(id)}">Unblock</button></div>`).join("") : '<span class="muted" style="font-size:14px">Nobody. Tap a message in a chat to block someone.</span>';
+    el.innerHTML = ids.length ? ids.map((id) => `<div class="brow"><b>${esc(b[id])}</b><button data-u="${esc(id)}">Unblock</button></div>`).join("") : '<span class="muted" style="font-size:14px">Nobody. Tap a person in a chat to block them.</span>';
     el.querySelectorAll("button").forEach((x) => x.addEventListener("click", async () => { try { await db.unblockUser(user.uid, x.dataset.u); toast("Unblocked ✅"); } catch (e) { toast(e.message); } }));
   }));
 }
@@ -540,6 +612,7 @@ async function route() {
   const p = h.split("/").filter(Boolean);
   if (p[0] === "join" && p[1]) safe("kamiai-pending", p[1]);
   if (!user) { stopNotify(); viewLogin(); return; }
+  await loadProfiles([user.uid]);
   startNotify();
   const pending = safe("kamiai-pending");
   if (pending) {

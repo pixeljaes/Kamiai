@@ -70,6 +70,12 @@ export const db = {
     const d = state.dms.find((x) => x.id === id); if (d) { d.updatedAt = Date.now(); d.last = m.text.slice(0, 80); }
     save();
   },
+  async getProfiles(uids) {
+    const o = {};
+    uids.forEach((id) => { const a = state.accounts.find((x) => x.uid === id) || {}; o[id] = { name: a.name || "Someone", photo: a.photo || "", color: a.color || "", bio: a.bio || "", status: a.status || "online" }; });
+    return o;
+  },
+  async saveProfile(u, f) { const a = state.accounts.find((x) => x.uid === u); if (a) Object.assign(a, f); save(); },
   async getNames(uids) { const o = {}; uids.forEach((id) => { const a = state.accounts.find((x) => x.uid === id); o[id] = a ? a.name : "Someone"; }); return o; },
   watchBlocked(u, cb) { return sub(() => cb(state.blocks[u] || {})); },
   async blockUser(u, other, name) { state.blocks[u] = Object.assign({}, state.blocks[u], { [other]: name || "Someone" }); save(); },

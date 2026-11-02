@@ -221,4 +221,31 @@ a.dmrow:active,button.dmrow:active{background:rgba(255,255,255,.06)}
 .own{font-style:normal;font-size:11px;font-weight:800;letter-spacing:.5px;color:var(--accent2);border:1px solid var(--accent);border-radius:8px;padding:2px 7px}
 
 .hashbig{width:68px;height:68px;border-radius:50%;background:var(--card);display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:800;color:var(--soft)}
-.dmintro.top{margin:6px 0 10px}
+.dmintro.first{margin:6px 0 10px}
+
+/* profile */
+.av.c.has{position:relative}
+.sdot{position:absolute;right:-2px;bottom:-2px;border-radius:50%;border:3px solid var(--panel);box-sizing:content-box}
+.pstat{margin:0 20px 6px;color:var(--muted);font-size:14px;font-weight:600}
+.pbio{margin:6px 20px 8px;padding:12px 14px;border-radius:14px;background:var(--bg)}
+.pbio p{margin:6px 0 0;color:var(--soft);font-size:15px;line-height:1.4;overflow-wrap:anywhere;white-space:pre-wrap}
+.pbtns a.btn{text-decoration:none}
+.profrow{display:flex;align-items:flex-end;gap:12px;margin:-46px 20px 0;position:relative;flex-wrap:wrap}
+.profav2 .av{border:5px solid var(--bg);box-sizing:content-box}
+.profav2 .sdot{border-color:var(--bg)}
+.photobtns{display:flex;gap:8px;padding-bottom:6px;margin-left:auto}
+label.pill{display:flex;align-items:center;cursor:pointer}
+.area{height:auto;padding:12px 16px;resize:none;line-height:1.4}
+.cnt2{text-align:right;color:var(--muted);font-size:12px;margin-top:4px}
+.stseg{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stseg button{height:46px;border:1.5px solid var(--line2);border-radius:14px;background:var(--panel);display:flex;align-items:center;gap:8px;padding:0 12px;font-size:14px;font-weight:700}
+.stseg button i{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+.stseg button[aria-pressed=true]{border-color:var(--accent);background:rgba(255,106,26,.12)}
+.swatches{display:flex;gap:10px;flex-wrap:wrap}
+.swatches button{width:40px;height:40px;border-radius:50%;border:3px solid transparent;padding:0}
+.swatches button[aria-pressed=true]{border-color:#fff}
+.profbanner{transition:background .15s}
+
+.pbanner{height:84px}
+.msgs>*{flex-shrink:0}
+textarea{font-family:inherit;color:inherit}
