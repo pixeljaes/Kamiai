@@ -11,6 +11,8 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const sub = (fn) => { listeners.add(fn); fn(); return () => listeners.delete(fn); };
 const code = () => Math.random().toString(36).slice(2, 10);
 
+const extra = (m) => { const o = { uid: m.uid, name: m.name, text: m.text || "" }; if (m.image) o.image = m.image; if (m.replyTo) o.replyTo = m.replyTo; return o; };
+
 export const db = {
   mode: "demo",
   onUser(cb) {
@@ -66,8 +68,8 @@ export const db = {
   watchDMMessages(id, cb) { return sub(() => cb(state.dmMessages.filter((m) => m.dmId === id).sort((a, b) => a.createdAt - b.createdAt).slice(-100))); },
   async sendDM(id, m) {
     const dd = state.dms.find((x) => x.id === id); if (!dd || dd.status !== "accepted") throw new Error("They haven't accepted yet.");
-    state.dmMessages.push({ id: uid(), dmId: id, uid: m.uid, name: m.name, text: m.text, createdAt: Date.now() });
-    const d = state.dms.find((x) => x.id === id); if (d) { d.updatedAt = Date.now(); d.last = m.text.slice(0, 80); }
+    state.dmMessages.push(Object.assign({ id: uid(), dmId: id, createdAt: Date.now() }, extra(m)));
+    const d = state.dms.find((x) => x.id === id); if (d) { d.updatedAt = Date.now(); d.last = (m.text || "📷 Photo").slice(0, 80); }
     save();
   },
   async getProfiles(uids) {
@@ -81,5 +83,7 @@ export const db = {
   async blockUser(u, other, name) { state.blocks[u] = Object.assign({}, state.blocks[u], { [other]: name || "Someone" }); save(); },
   async unblockUser(u, other) { const b = Object.assign({}, state.blocks[u]); delete b[other]; state.blocks[u] = b; save(); },
   async reportMessage(r) { state.reports.push(Object.assign({}, r, { createdAt: Date.now() })); save(); },
-  async sendMessage(sid, rid, m) { state.messages.push({ id: uid(), roomId: rid, serverId: sid, uid: m.uid, name: m.name, text: m.text, createdAt: Date.now() }); save(); }
+  async sendMessage(sid, rid, m) { state.messages.push(Object.assign({ id: uid(), roomId: rid, serverId: sid, createdAt: Date.now() }, extra(m))); save(); },
+  async editMsg(c, id, text) { const m = (c.kind === "dm" ? state.dmMessages : state.messages).find((x) => x.id === id); if (m) { m.text = text; m.edited = true; save(); } },
+  async deleteMsg(c, id) { const k = c.kind === "dm" ? "dmMessages" : "messages"; state[k] = state[k].filter((x) => x.id !== id); save(); }
 };

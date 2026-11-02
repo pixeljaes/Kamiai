@@ -22,6 +22,14 @@ const friendly = (e) => {
 };
 const wrap = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { throw friendly(e); } };
 
+const msgData = (m) => {
+  const d = { uid: m.uid, name: m.name, text: m.text || "", createdAt: serverTimestamp() };
+  if (m.image) d.image = m.image;
+  if (m.replyTo) d.replyTo = { name: String(m.replyTo.name || "").slice(0, 40), text: String(m.replyTo.text || "").slice(0, 80) };
+  return d;
+};
+const msgRef = (c, id) => c.kind === "dm" ? doc(fs, "dms", c.id, "messages", id) : doc(fs, "servers", c.sid, "rooms", c.rid, "messages", id);
+
 export const db = {
   mode: "online",
   onUser(cb) {
@@ -101,8 +109,8 @@ export const db = {
     }, () => cb([]));
   },
   sendDM: wrap(async (id, m) => {
-    await addDoc(collection(fs, "dms", id, "messages"), { uid: m.uid, name: m.name, text: m.text, createdAt: serverTimestamp() });
-    await setDoc(doc(fs, "dms", id), { updatedAt: serverTimestamp(), last: m.text.slice(0, 80) }, { merge: true });
+    await addDoc(collection(fs, "dms", id, "messages"), msgData(m));
+    await setDoc(doc(fs, "dms", id), { updatedAt: serverTimestamp(), last: (m.text || "📷 Photo").slice(0, 80) }, { merge: true });
   }),
   async getProfiles(uids) {
     const out = {};
@@ -125,7 +133,7 @@ export const db = {
   blockUser: wrap((u, other, name) => setDoc(doc(fs, "users", u), { blocked: { [other]: name || "Someone" } }, { merge: true })),
   unblockUser: wrap((u, other) => setDoc(doc(fs, "users", u), { blocked: { [other]: deleteField() } }, { merge: true })),
   reportMessage: wrap((r) => addDoc(collection(fs, "reports"), { ...r, createdAt: serverTimestamp() })),
-  sendMessage: wrap((sid, rid, m) => addDoc(collection(fs, "servers", sid, "rooms", rid, "messages"), {
-    uid: m.uid, name: m.name, text: m.text, createdAt: serverTimestamp()
-  }))
+  sendMessage: wrap((sid, rid, m) => addDoc(collection(fs, "servers", sid, "rooms", rid, "messages"), msgData(m))),
+  editMsg: wrap((c, id, text) => updateDoc(msgRef(c, id), { text, edited: true })),
+  deleteMsg: wrap((c, id) => deleteDoc(msgRef(c, id)))
 };

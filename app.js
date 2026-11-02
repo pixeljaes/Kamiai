@@ -206,9 +206,9 @@ function msgsHtml(ms) {
   ms.forEach((m, i) => {
     const d = new Date(m.createdAt), day = d.toDateString();
     if (day !== lastDay) { html += `<div class="day"><i></i><span>${esc(d.toDateString() === new Date().toDateString() ? "Today" : d.toLocaleDateString([], { month: "short", day: "numeric" }))}</span><i></i></div>`; lastDay = day; prev = null; }
-    const cont = prev && prev.uid === m.uid && m.createdAt - prev.createdAt < 5 * 60000;
+    const cont = prev && prev.uid === m.uid && m.createdAt - prev.createdAt < 5 * 60000 && !m.replyTo;
     html += `<div class="msg${cont ? " cont" : ""}" data-i="${i}">${cont ? '<div class="sp"></div>' : `<button class="avb" data-u="${esc(m.uid)}" data-n="${esc(m.name)}" aria-label="${esc(m.name)}, open profile">${avatar(m.uid, m.name)}</button>`}
-      <div class="body">${cont ? "" : `<div class="meta"><b data-u="${esc(m.uid)}" data-n="${esc(m.name)}">${esc(m.name)}</b><time>${fmtT(m.createdAt)}</time></div>`}<p>${esc(m.text)}</p></div></div>`;
+      <div class="body">${m.replyTo ? `<div class="rpl"><b>${esc(m.replyTo.name)}</b> ${esc(m.replyTo.text)}</div>` : ""}${cont ? "" : `<div class="meta"><b data-u="${esc(m.uid)}" data-n="${esc(m.name)}">${esc(m.name)}</b><time>${fmtT(m.createdAt)}</time></div>`}${m.text ? `<p>${esc(m.text)}${m.edited ? ' <em class="ed">(edited)</em>' : ""}</p>` : ""}${m.image ? `<img class="mimg" src="${esc(m.image)}" alt="Picture sent by ${esc(m.name)}" loading="lazy">` : ""}</div></div>`;
     prev = m;
   });
   return html;
@@ -219,6 +219,7 @@ function wireMsgs(box, ctx) {
   const cancel = () => { clearTimeout(timer); timer = null; };
   box.addEventListener("click", (e) => {
     if (fired) { fired = false; return; }
+    const im = e.target.closest(".mimg"); if (im) { viewImage(im.src); return; }
     const t = e.target.closest("[data-u]"); if (t) openProfile({ uid: t.dataset.u, name: t.dataset.n }, ctx);
   });
   box.addEventListener("pointerdown", (e) => {
@@ -235,22 +236,102 @@ function wireMsgs(box, ctx) {
   box.addEventListener("scroll", cancel, { passive: true });
   box.addEventListener("contextmenu", (e) => e.preventDefault());
 }
+const EMOJI = {
+  "😀": "😀😃😄😁😆😅😂🤣🥲😊😇🙂😉😍🥰😘😋😛😜🤪😎🤩🥳😏😒😞😔😟😕🙁😣😖😫😩🥺😢😭😤😠😡🤬🤯😳🥵🥶😱😨😰😥😓🤗🤔🤭🤫😶😐😑😬🙄😯😮😲🥱😴🤤😪😵🤐🥴🤢🤮🤧😷",
+  "👍": "👍👎👊✊🤛🤜👏🙌🤝🙏💪🤞✌️🤟🤘👌🤌👈👉👆👇☝️✋🤚🖐️👋🤙🫶🫡",
+  "❤️": "❤️🧡💛💚💙💜🖤🤍🤎💔❣️💕💞💓💗💖💘💝✨🌟⭐🔥💥💯✅❌❗❓💤💢💦",
+  "🍥": "🍥🍜🍙🍣🍡🍵🍶🌸⛩️🎌🗾🏯🎴🎎🎏🎐🐉🦊🐱🐶🐰🐼🦁🐯🐸🌙☀️⚡🌈❄️🌊⚔️🗡️🛡️🏹🎮🎧🎤📚🎬🎨",
+  "🎉": "🎉🎊🎈🎁🏆🥇⚽🏀🏈🎯🍕🍔🍟🌭🍿🍩🍪🍫🍰🍦☕🍺🚀✈️🚗🏠💻📱💡⏰"
+};
 function composer(placeholder) {
-  return `<form class="composer" id="cf" autocomplete="off">
-    <label for="mi" style="position:absolute;left:-9999px">Message</label>
-    <input id="mi" placeholder="${esc(placeholder)}" maxlength="2000" enterkeyhint="send">
-    <button class="send" aria-label="Send" type="submit">${I.send}</button></form>`;
+  return `<div class="cstate" id="cs" hidden></div><div class="emopanel" id="ep" hidden></div>
+  <form class="composer" id="cf" autocomplete="off">
+    <button class="cbtn" id="ca" type="button" aria-label="Send a picture">${I.plus}</button>
+    <div class="cwrap"><label for="mi" style="position:absolute;left:-9999px">Message</label>
+      <input id="mi" placeholder="${esc(placeholder)}" maxlength="2000" enterkeyhint="send">
+      <button class="cbtn inner" id="ce" type="button" aria-label="Emoji">😀</button></div>
+    <button class="send" aria-label="Send" type="submit">${I.send}</button>
+    <input type="file" id="cfile" accept="image/*" hidden></form>`;
 }
-function wireComposer(onSend, box) {
-  const input = document.getElementById("mi"), cf = document.getElementById("cf");
-  input.addEventListener("input", () => cf.classList.toggle("has", !!input.value.trim()));
-  cf.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = input.value.trim(); if (!text) return;
-    input.value = ""; cf.classList.remove("has"); input.focus();
-    try { await onSend(text); setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50); }
-    catch (x) { toast(x.message); input.value = text; cf.classList.add("has"); }
+function resizeImage(file, max = 800) {
+  return new Promise((ok, no) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); ok(c.toDataURL("image/jpeg", 0.72));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); no(new Error("Couldn't open that picture.")); };
+    img.src = url;
   });
+}
+function viewImage(src) {
+  const bg = document.createElement("div");
+  bg.className = "imgview"; bg.innerHTML = `<img src="${esc(src)}" alt="Picture"><button class="iconbtn" aria-label="Close">${I.back}</button>`;
+  bg.addEventListener("click", () => bg.remove());
+  $app.appendChild(bg);
+}
+// returns a small controller so the message menu can start a reply or an edit
+function wireComposer(h, box) {
+  const input = document.getElementById("mi"), cf = document.getElementById("cf"), cs = document.getElementById("cs"), ep = document.getElementById("ep");
+  const file = document.getElementById("cfile");
+  let reply = null, edit = null, image = "", busy = false;
+  const sync = () => cf.classList.toggle("has", !!(input.value.trim() || image));
+  const state = () => {
+    const parts = [];
+    if (edit) parts.push(`<div class="cs-row"><span>Editing message</span><button type="button" data-x="edit" aria-label="Cancel">✕</button></div>`);
+    if (reply) parts.push(`<div class="cs-row"><span>Replying to <b>${esc(reply.name)}</b></span><button type="button" data-x="reply" aria-label="Cancel">✕</button></div>`);
+    if (image) parts.push(`<div class="cs-row img"><img src="${esc(image)}" alt="Picture to send"><button type="button" data-x="image" aria-label="Remove picture">✕</button></div>`);
+    cs.hidden = !parts.length; cs.innerHTML = parts.join("");
+    sync();
+  };
+  cs.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.x === "edit") { edit = null; input.value = ""; }
+    if (b.dataset.x === "reply") reply = null;
+    if (b.dataset.x === "image") image = "";
+    state();
+  });
+  input.addEventListener("input", sync);
+  input.addEventListener("focus", () => { ep.hidden = true; });
+  document.getElementById("ca").addEventListener("click", () => file.click());
+  file.addEventListener("change", async (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = ""; if (!f) return;
+    try { image = await resizeImage(f); edit = null; state(); } catch (x) { toast(x.message); }
+  });
+  // emoji panel
+  const tabs = Object.keys(EMOJI); let tab = tabs[0];
+  const split = (str) => (window.Intl && Intl.Segmenter) ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(str)].map((x) => x.segment) : Array.from(str);
+  const drawEp = () => {
+    ep.innerHTML = `<div class="etabs">${tabs.map((t) => `<button type="button" data-t="${t}" aria-pressed="${t === tab}">${t}</button>`).join("")}</div>
+      <div class="egrid">${split(EMOJI[tab]).map((e) => `<button type="button" data-e="${e}">${e}</button>`).join("")}</div>`;
+  };
+  document.getElementById("ce").addEventListener("click", () => { ep.hidden = !ep.hidden; if (!ep.hidden) { drawEp(); input.blur(); } });
+  ep.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-t]"); if (t) { tab = t.dataset.t; drawEp(); return; }
+    const m = e.target.closest("[data-e]"); if (!m) return;
+    const st = input.selectionStart == null ? input.value.length : input.selectionStart, en = input.selectionEnd == null ? st : input.selectionEnd;
+    input.setRangeText(m.dataset.e, st, en, "end"); sync();
+  });
+  cf.addEventListener("submit", async (e) => {
+    e.preventDefault(); if (busy) return;
+    const text = input.value.trim();
+    if (!text && !image) return;
+    busy = true; ep.hidden = true;
+    const snap = { text, image, reply, edit };
+    input.value = ""; image = ""; reply = null; edit = null; state();
+    try {
+      if (snap.edit) await h.edit(snap.edit, text);
+      else await h.send({ text, image: snap.image, replyTo: snap.reply ? { name: snap.reply.name, text: snap.reply.text || "📷 Photo" } : null });
+      setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50);
+    } catch (x) { toast(x.message); input.value = text; image = snap.image; reply = snap.reply; edit = snap.edit; state(); }
+    busy = false;
+  });
+  return {
+    reply(m) { reply = m; edit = null; state(); input.focus(); },
+    edit(m) { edit = m; reply = null; image = ""; input.value = m.text; state(); input.focus(); },
+  };
 }
 
 /* ---------- Chat ---------- */
@@ -281,9 +362,13 @@ function viewChat(sid, rid) {
   };
   on(db.watchBlocked(user.uid, (b) => { blocked = b || {}; draw(); }));
   on(db.watchMessages(sid, rid, (ms) => { list = ms; draw(); }));
-  wireMsgs(box, { kind: "room", sid, rid });
-  document.getElementById("mb").addEventListener("click", () => { if (server) openMembers(server, { kind: "room", sid, rid }); });
-  wireComposer((text) => db.sendMessage(sid, rid, { uid: user.uid, name: user.name, text }), box);
+  const ctx = { kind: "room", sid, rid, isOwner: () => !!server && server.ownerId === user.uid };
+  wireMsgs(box, ctx);
+  document.getElementById("mb").addEventListener("click", () => { if (server) openMembers(server, ctx); });
+  ctx.ctl = wireComposer({
+    send: (x) => db.sendMessage(sid, rid, { uid: user.uid, name: user.name, ...x }),
+    edit: (m, text) => db.editMsg(ctx, m.id, text)
+  }, box);
 }
 
 /* ---------- Direct message chat ---------- */
@@ -331,8 +416,12 @@ function viewDM(id) {
   on(db.watchDM(id, (d) => { dm = d; head(); }));
   on(db.watchBlocked(user.uid, (b) => { blocked = b || {}; draw(); }));
   on(db.watchDMMessages(id, (ms) => { list = ms; draw(); }));
-  wireMsgs(box, { kind: "dm", id });
-  wireComposer((text) => db.sendDM(id, { uid: user.uid, name: user.name, text }), box);
+  const ctx = { kind: "dm", id, isOwner: () => false };
+  wireMsgs(box, ctx);
+  ctx.ctl = wireComposer({
+    send: (x) => db.sendDM(id, { uid: user.uid, name: user.name, ...x }),
+    edit: (m, text) => db.editMsg(ctx, m.id, text)
+  }, box);
 }
 
 /* ---------- Sheets: message actions, profile card, members ---------- */
@@ -350,19 +439,29 @@ async function startDM(p) {
   go("#/dm/" + id);
 }
 function openSheet(m, ctx) {
-  const mine = m.uid === user.uid;
-  const s = sheet(`<div class="quote"><b>${esc(m.name)}</b><br>${esc(m.text)}</div>
-    <button id="cp">Copy text</button>
+  const mine = m.uid === user.uid, canDel = mine || (ctx.isOwner && ctx.isOwner());
+  const s = sheet(`<div class="quote"><b>${esc(m.name)}</b><br>${m.text ? esc(m.text) : "📷 Photo"}</div>
+    <button id="rpy">Reply</button>
+    ${m.text ? '<button id="cp">Copy text</button>' : ""}
+    ${mine && m.text ? '<button id="ed">Edit message</button>' : ""}
     ${!mine && ctx.kind === "room" ? `<button id="dmb">Message ${esc(m.name)}</button>` : ""}
     ${!mine ? `<button id="rp">Report message</button><button id="bl" class="danger">Block ${esc(m.name)}</button>` : ""}
+    ${canDel ? '<button id="dl2" class="danger">Delete message</button>' : ""}
     <button id="cx" class="plain">Cancel</button>`);
   s.q("#cx").addEventListener("click", s.close);
-  s.q("#cp").addEventListener("click", async () => { try { await navigator.clipboard.writeText(m.text); toast("Copied ✅"); } catch (e) { toast("Couldn't copy"); } s.close(); });
+  s.q("#rpy").addEventListener("click", () => { s.close(); if (ctx.ctl) ctx.ctl.reply({ name: m.name, text: m.text }); });
+  const cp = s.q("#cp"); if (cp) cp.addEventListener("click", async () => { try { await navigator.clipboard.writeText(m.text); toast("Copied ✅"); } catch (e) { toast("Couldn't copy"); } s.close(); });
+  const ed = s.q("#ed"); if (ed) ed.addEventListener("click", () => { s.close(); if (ctx.ctl) ctx.ctl.edit({ id: m.id, text: m.text }); });
+  const d2 = s.q("#dl2"); if (d2) d2.addEventListener("click", async () => {
+    s.close();
+    if (!confirm("Delete this message for everyone?")) return;
+    try { await db.deleteMsg(ctx, m.id); toast("Deleted"); } catch (x) { toast(x.message); }
+  });
   const dmb = s.q("#dmb");
   if (dmb) dmb.addEventListener("click", async () => { s.close(); try { await startDM({ uid: m.uid, name: m.name }); } catch (x) { toast(x.message); } });
   const rp = s.q("#rp");
   if (rp) rp.addEventListener("click", async () => {
-    try { await db.reportMessage({ reporterId: user.uid, messageUid: m.uid, messageName: m.name, text: m.text, messageId: m.id || "", serverId: ctx.sid || "dm", roomId: ctx.rid || ctx.id || "" }); toast("Thanks, we'll look at it ✅"); }
+    try { await db.reportMessage({ reporterId: user.uid, messageUid: m.uid, messageName: m.name, text: m.text || "[photo]", messageId: m.id || "", serverId: ctx.sid || "dm", roomId: ctx.rid || ctx.id || "" }); toast("Thanks, we'll look at it ✅"); }
     catch (x) { toast(x.message); }
     s.close();
   });
@@ -572,7 +671,7 @@ function startNotify() {
               if (viewing(sv.id, r.id)) return;
               unread[r.id] = (unread[r.id] || 0) + 1;
               setBadge(); ding();
-              toast(`${m.name} in #${r.name}: ${String(m.text).slice(0, 60)}`);
+              toast(`${m.name} in #${r.name}: ${String(m.text || "📷 Photo").slice(0, 60)}`);
             });
           }));
         });
@@ -593,7 +692,7 @@ function startNotify() {
           if (document.visibilityState === "visible" && location.hash === "#/dm/" + d.id) return;
           unread["dm:" + d.id] = (unread["dm:" + d.id] || 0) + 1;
           setBadge(); ding();
-          toast(`${m.name}: ${String(m.text).slice(0, 60)}`);
+          toast(`${m.name}: ${String(m.text || "📷 Photo").slice(0, 60)}`);
         });
       }));
     });
