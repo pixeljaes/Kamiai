@@ -29,6 +29,7 @@ const I = {
   sms: '<svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg>',
   mail: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>',
   more: '<svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5M5 14v6h14v-6"/></svg>',
+  people: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17.5" cy="9" r="2.5"/><path d="M17 14.2a5 5 0 0 1 4.5 5"/></svg>',
   dots: '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>',
   star: '<svg viewBox="0 0 24 24" style="fill:#111"><path d="M2 5.2L8 6.4h8l6-1.2-.7 2.4H2.7z"/><path d="M4.4 8.6h15.2v1.4H4.4zM5.2 12.2h13.6v1.5H5.2zM10.9 10h2.2v2.2h-2.2zM6.2 8.6h1.6L7.3 20H5.5zM16.2 8.6h1.6l.7 11.4h-1.8z"/></svg>'
 };
@@ -73,51 +74,56 @@ function viewLogin() {
   if (g) g.addEventListener("click", async () => { try { await db.google(); } catch (x) { err(x.message); } });
 }
 
+/* ---------- shared helpers ---------- */
+const nameCache = {};
+async function namesFor(uids) {
+  const need = uids.filter((u) => !nameCache[u]);
+  if (need.length) Object.assign(nameCache, await db.getNames(need));
+  return nameCache;
+}
+const avatar = (uid, name, size = 40) => `<span class="av c" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.4)}px;background:${colorOf(uid)}">${esc(initials(name))}</span>`;
+const fmtT = (t) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const dmUnread = () => Object.keys(unread).filter((k) => k.startsWith("dm:")).reduce((a, k) => a + unread[k], 0);
+function rail(servers, active) {
+  const n = dmUnread();
+  return `<nav class="rail" aria-label="Your servers">
+    <a class="sv homebtn ${active === "home" ? "on" : ""}" href="#/dms" aria-label="Direct messages">${I.star}${n ? `<i class="rb">${n}</i>` : ""}</a>
+    <div class="sep"></div>
+    ${servers.map((s) => `<a class="sv ${s.id === active ? "on" : ""}" href="#/s/${s.id}" aria-label="${esc(s.name)}" ${s.id === active ? 'aria-current="true"' : ""}>${esc(initials(s.name))}</a>`).join("")}
+    <a class="sv add" href="#/create" aria-label="Create a server">${I.plus}</a>
+  </nav>`;
+}
+const userbar = () => `<div class="userbar"><a class="ubl" href="#/profile">${avatar(user.uid, user.name, 40)}
+  <div class="who"><b>${esc(user.name)}</b><span>Online</span></div></a>
+  <a class="iconbtn" href="#/profile" aria-label="Settings">${I.gear}</a></div>`;
+
 /* ---------- Home: servers, rooms ---------- */
 function viewHome(sid) {
-  let servers = null, rooms = [], adding = false, dms = [], names = {}, askedFor = "";
+  let servers = null, rooms = [], adding = false;
   const draw = () => {
     if (servers === null) return;
     if (!servers.length) {
-      mount(`<div class="screen"><div class="empty"><div class="logo">${I.star}</div><h2>Welcome, ${esc(user.name)}!</h2>
+      mount(`<div class="screen home">${rail([], "home")}<section class="panel"><div class="empty"><div class="logo">${I.star}</div><h2>Welcome, ${esc(user.name)}!</h2>
         <p class="sub">Servers are places for you and your friends. Make one, or open an invite link a friend sent you.</p>
         <a class="btn" href="#/create" style="max-width:260px">Create a server</a>
-        <a class="link" href="#/profile">Your profile</a></div></div>`);
+        <a class="link" href="#/profile">Your profile</a></div></section></div>`);
       return;
     }
     const cur = servers.find((s) => s.id === sid);
     if (!cur) { go("#/s/" + (safe("kamiai-last") && servers.find((s) => s.id === safe("kamiai-last")) ? safe("kamiai-last") : servers[0].id)); return; }
     safe("kamiai-last", cur.id);
     const owner = cur.ownerId === user.uid;
-    mount(`<div class="screen home">
-      <nav class="rail" aria-label="Your servers">
-        ${servers.map((s) => `<a class="sv ${s.id === cur.id ? "on" : ""}" href="#/s/${s.id}" aria-label="${esc(s.name)}" ${s.id === cur.id ? 'aria-current="true"' : ""}>${esc(initials(s.name))}</a>`).join("")}
-        <div class="sep"></div>
-        <a class="sv add" href="#/create" aria-label="Create a server">${I.plus}</a>
-      </nav>
+    mount(`<div class="screen home">${rail(servers, cur.id)}
       <section class="panel">
         <div class="phead"><div class="nm">${esc(cur.name)}<span class="cnt">${cur.members.length} member${cur.members.length === 1 ? "" : "s"}</span></div>
           <a class="iconbtn bg" href="#/invite/${cur.id}" aria-label="Invite friends">${I.invite}</a></div>
         <div class="rooms">
-          <div class="sec"><span>ROOMS</span>${owner ? `<button class="iconbtn" id="addroom" aria-label="Add a room" style="width:32px;height:32px">${I.plus}</button>` : ""}</div>
+          <div class="sec"><span>TEXT ROOMS</span>${owner ? `<button class="iconbtn" id="addroom" aria-label="Add a room" style="width:32px;height:32px">${I.plus}</button>` : ""}</div>
           ${adding ? `<form id="rf" style="display:flex;gap:8px;padding:0 4px 8px"><label for="rn" style="position:absolute;left:-9999px">Room name</label><input class="field" id="rn" placeholder="new-room" maxlength="24" style="height:44px;font-size:15px"><button class="btn small" type="submit">Add</button></form>` : ""}
           ${rooms.map((r) => `<a class="room" href="#/chat/${cur.id}/${r.id}">${I.hash}<span>${esc(r.name)}</span>${unread[r.id] ? `<i class="ub">${unread[r.id]}</i>` : ""}</a>`).join("")}
-          ${dms.filter((d) => d.status === "pending" && d.requestedBy !== user.uid).length ? `<div class="sec" style="margin-top:14px"><span>MESSAGE REQUESTS</span></div>${dms.filter((d) => d.status === "pending" && d.requestedBy !== user.uid).map((d) => { const o = d.members.find((x) => x !== user.uid); return `<div class="brow"><span class="av mini" style="background:${colorOf(o)}">${esc(initials((d.names || {})[o]))}</span><b>${esc((d.names || {})[o] || "Someone")}</b><button data-acc="${d.id}">Accept</button><button data-dec="${d.id}">✕</button></div>`; }).join("")}` : ""}
-          ${dms.filter((d) => d.status === "accepted" || d.requestedBy === user.uid).length ? `<div class="sec" style="margin-top:14px"><span>DIRECT MESSAGES</span></div>${dms.filter((d) => d.status === "accepted" || d.requestedBy === user.uid).map((d) => { const o = d.members.find((x) => x !== user.uid); return `<a class="room" href="#/dm/${d.id}"><span class="av mini" style="background:${colorOf(o)}">${esc(initials((d.names || {})[o]))}</span><span>${esc((d.names || {})[o] || "Someone")}${d.status === "pending" ? " · waiting" : ""}</span>${unread["dm:" + d.id] ? `<i class="ub">${unread["dm:" + d.id]}</i>` : ""}</a>`; }).join("")}` : ""}
-          <div class="sec" style="margin-top:14px"><span>MEMBERS</span></div>
-          ${cur.members.map((m) => `<button class="room mem" data-u="${esc(m)}" ${m === user.uid ? "disabled" : ""}><span class="av mini" style="background:${colorOf(m)}">${esc(initials(names[m]))}</span><span>${esc(names[m] || "…")}${m === user.uid ? " (you)" : ""}</span></button>`).join("")}
         </div>
-        <div class="userbar"><div class="av" style="background:${colorOf(user.uid)}">${esc(initials(user.name))}</div>
-          <div class="who"><b>${esc(user.name)}</b><span>Online</span></div>
-          <a class="iconbtn" href="#/profile" aria-label="Settings">${I.gear}</a></div>
+        ${userbar()}
       </section></div>`);
-    document.querySelectorAll(".room.mem:not([disabled])").forEach((b) => b.addEventListener("click", async () => {
-      try { const o = b.dataset.u; const id = await db.openDM(user.uid, user.name, o, names[o] || "Someone"); go("#/dm/" + id); } catch (x) { toast(x.message); }
-    }));
-    const need = cur.members.filter((m) => !names[m]).join(",");
-    if (need && need !== askedFor) { askedFor = need; db.getNames(cur.members.filter((m) => !names[m])).then((n) => { Object.assign(names, n); draw(); }); }
-    document.querySelectorAll("[data-acc]").forEach((b) => b.addEventListener("click", async () => { try { await db.acceptDM(b.dataset.acc); toast("Accepted ✅"); } catch (x) { toast(x.message); } }));
-    document.querySelectorAll("[data-dec]").forEach((b) => b.addEventListener("click", async () => { try { await db.declineDM(b.dataset.dec); toast("Request removed"); } catch (x) { toast(x.message); } }));
     const ar = document.getElementById("addroom");
     if (ar) ar.addEventListener("click", () => { adding = !adding; draw(); const i = document.getElementById("rn"); if (i) i.focus(); });
     const rf = document.getElementById("rf");
@@ -128,28 +134,96 @@ function viewHome(sid) {
       try { await db.createRoom(cur.id, n); adding = false; } catch (x) { toast(x.message); }
     });
   };
-  on(db.watchDMs(user.uid, (l) => { dms = l; draw(); }));
+  on(db.watchDMs(user.uid, () => { if (servers) draw(); }));
   onUnread = () => { if (!adding) draw(); };
   on(() => { onUnread = null; });
   on(db.watchMyServers(user.uid, (s) => { servers = s; draw(); }));
-  // rooms for the selected server; re-subscribe when we know which one
   if (sid) on(db.watchRooms(sid, (r) => { rooms = r; draw(); }));
 }
 
+/* ---------- Direct messages home (like Discord's Home tab) ---------- */
+function viewDMs() {
+  let servers = null, dms = [], showReq = false;
+  const other = (d) => d.members.find((x) => x !== user.uid);
+  const nm = (d) => (d.names || {})[other(d)] || "Someone";
+  const draw = () => {
+    if (servers === null) return;
+    const reqs = dms.filter((d) => d.status === "pending" && d.requestedBy !== user.uid);
+    const list = dms.filter((d) => d.status === "accepted" || d.requestedBy === user.uid);
+    let body;
+    if (showReq) {
+      body = `<button class="room" id="rb">${I.back}<span>Back</span></button>` + (reqs.length ? reqs.map((d) => `<div class="dmrow">${avatar(other(d), nm(d), 44)}<div class="dmtxt"><b>${esc(nm(d))}</b><span>wants to message you</span></div>
+        <button class="pill" data-acc="${d.id}">Accept</button><button class="pill ghost" data-dec="${d.id}">Ignore</button></div>`).join("") : '<div class="hint">No requests right now.</div>');
+    } else {
+      body = (reqs.length ? `<button class="dmrow reqrow" id="rq"><span class="reqicon">${I.invite}</span><div class="dmtxt"><b>Message requests</b><span>${reqs.length} waiting</span></div><i class="ub">${reqs.length}</i></button>` : "")
+        + (list.length ? list.map((d) => `<a class="dmrow" href="#/dm/${d.id}">${avatar(other(d), nm(d), 44)}<div class="dmtxt"><b>${esc(nm(d))}</b><span>${d.status === "pending" ? "Request sent · waiting" : esc(d.last || "Say hi 👋")}</span></div>${unread["dm:" + d.id] ? `<i class="ub">${unread["dm:" + d.id]}</i>` : ""}</a>`).join("")
+          : (reqs.length ? "" : '<div class="hint"><b>No messages yet</b><br>Tap someone\'s picture in a chat, then press Message.</div>'));
+    }
+    mount(`<div class="screen home">${rail(servers, "home")}
+      <section class="panel"><div class="phead"><div class="nm">${showReq ? "Message requests" : "Direct messages"}</div></div>
+        <div class="rooms dml">${body}</div>${userbar()}</section></div>`);
+    const rq = document.getElementById("rq"); if (rq) rq.addEventListener("click", () => { showReq = true; draw(); });
+    const rb = document.getElementById("rb"); if (rb) rb.addEventListener("click", () => { showReq = false; draw(); });
+    document.querySelectorAll("[data-acc]").forEach((b) => b.addEventListener("click", async () => { try { await db.acceptDM(b.dataset.acc); toast("Accepted ✅"); } catch (x) { toast(x.message); } }));
+    document.querySelectorAll("[data-dec]").forEach((b) => b.addEventListener("click", async () => { try { await db.declineDM(b.dataset.dec); } catch (x) { toast(x.message); } }));
+  };
+  on(db.watchMyServers(user.uid, (s) => { servers = s; draw(); }));
+  on(db.watchDMs(user.uid, (l) => { dms = l; draw(); }));
+  onUnread = draw;
+  on(() => { onUnread = null; });
+}
+
 /* ---------- shared message list ---------- */
-const fmtT = (t) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 function msgsHtml(ms) {
-    let html = "", lastDay = "", prev = null;
-    ms.forEach((m, i) => {
-      const d = new Date(m.createdAt), day = d.toDateString();
-      if (day !== lastDay) { html += `<div class="day"><i></i><span>${esc(d.toDateString() === new Date().toDateString() ? "Today" : d.toLocaleDateString([], { month: "short", day: "numeric" }))}</span><i></i></div>`; lastDay = day; prev = null; }
-      const cont = prev && prev.uid === m.uid && m.createdAt - prev.createdAt < 5 * 60000;
-      const mine = m.uid === user.uid;
-      html += `<div class="msg ${cont ? "cont" : ""} ${mine ? "mine" : ""}" data-i="${i}">${cont ? '<div class="sp"></div>' : `<div class="av" style="background:${colorOf(m.uid)}">${esc(initials(m.name))}</div>`}
-        <div class="body">${cont ? "" : `<div class="meta"><b style="color:${mine ? "var(--accent2)" : "#fff"}">${esc(m.name)}</b><time>${fmtT(m.createdAt)}</time></div>`}<p>${esc(m.text)}</p></div>${mine ? "" : `<span class="dots" aria-hidden="true">${I.dots}</span>`}</div>`;
-      prev = m;
-    });
+  let html = "", lastDay = "", prev = null;
+  ms.forEach((m, i) => {
+    const d = new Date(m.createdAt), day = d.toDateString();
+    if (day !== lastDay) { html += `<div class="day"><i></i><span>${esc(d.toDateString() === new Date().toDateString() ? "Today" : d.toLocaleDateString([], { month: "short", day: "numeric" }))}</span><i></i></div>`; lastDay = day; prev = null; }
+    const cont = prev && prev.uid === m.uid && m.createdAt - prev.createdAt < 5 * 60000;
+    html += `<div class="msg${cont ? " cont" : ""}" data-i="${i}">${cont ? '<div class="sp"></div>' : `<button class="avb" data-u="${esc(m.uid)}" data-n="${esc(m.name)}" aria-label="${esc(m.name)}, open profile">${avatar(m.uid, m.name)}</button>`}
+      <div class="body">${cont ? "" : `<div class="meta"><b data-u="${esc(m.uid)}" data-n="${esc(m.name)}">${esc(m.name)}</b><time>${fmtT(m.createdAt)}</time></div>`}<p>${esc(m.text)}</p></div></div>`;
+    prev = m;
+  });
   return html;
+}
+// tap a name/picture = profile card; press and hold a message = actions (like Discord)
+function wireMsgs(box, ctx) {
+  let timer = null, sx = 0, sy = 0, fired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  box.addEventListener("click", (e) => {
+    if (fired) { fired = false; return; }
+    const t = e.target.closest("[data-u]"); if (t) openProfile({ uid: t.dataset.u, name: t.dataset.n }, ctx);
+  });
+  box.addEventListener("pointerdown", (e) => {
+    const el = e.target.closest(".msg"); if (!el) return;
+    sx = e.clientX; sy = e.clientY; fired = false;
+    timer = setTimeout(() => {
+      const m = (box.__ms || [])[+el.dataset.i]; if (!m) return;
+      fired = true; try { if (navigator.vibrate) navigator.vibrate(15); } catch (x) {}
+      openSheet(m, ctx);
+    }, 450);
+  });
+  box.addEventListener("pointermove", (e) => { if (timer && (Math.abs(e.clientX - sx) > 8 || Math.abs(e.clientY - sy) > 8)) cancel(); });
+  ["pointerup", "pointercancel", "pointerleave"].forEach((ev) => box.addEventListener(ev, cancel));
+  box.addEventListener("scroll", cancel, { passive: true });
+  box.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+function composer(placeholder) {
+  return `<form class="composer" id="cf" autocomplete="off">
+    <label for="mi" style="position:absolute;left:-9999px">Message</label>
+    <input id="mi" placeholder="${esc(placeholder)}" maxlength="2000" enterkeyhint="send">
+    <button class="send" aria-label="Send" type="submit">${I.send}</button></form>`;
+}
+function wireComposer(onSend, box) {
+  const input = document.getElementById("mi"), cf = document.getElementById("cf");
+  input.addEventListener("input", () => cf.classList.toggle("has", !!input.value.trim()));
+  cf.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim(); if (!text) return;
+    input.value = ""; cf.classList.remove("has"); input.focus();
+    try { await onSend(text); setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50); }
+    catch (x) { toast(x.message); input.value = text; cf.classList.add("has"); }
+  });
 }
 
 /* ---------- Chat ---------- */
@@ -158,122 +232,144 @@ function viewChat(sid, rid) {
   let room = null, server = null, blocked = {}, list = [];
   mount(`<div class="screen chat">
     <div class="top"><a class="iconbtn" href="#/s/${sid}" aria-label="Back to rooms">${I.back}</a>
-      <div class="tt"><b id="rt">#</b><span id="st"></span></div></div>
-    <div class="msgs" id="msgs" role="log" aria-label="Messages"></div>
-    <form class="composer" id="cf" autocomplete="off">
-      <label for="mi" style="position:absolute;left:-9999px">Message</label>
-      <input id="mi" placeholder="Message" maxlength="2000" enterkeyhint="send">
-      <button class="send" aria-label="Send" type="submit">${I.send}</button>
-    </form></div>`);
-  const head = () => { document.getElementById("rt").textContent = "# " + (room ? room.name : ""); document.getElementById("st").textContent = server ? server.name : ""; };
-  on(db.watchServer(sid, (s) => { server = s; if (s === null && db.mode === "online") { /* not a member */ } head(); }));
+      <div class="tt"><b id="rt">#</b><span id="st"></span></div>
+      <button class="iconbtn" id="mb" aria-label="Members">${I.people}</button></div>
+    <div class="msgs" id="msgs" role="log" aria-label="Messages"></div>${composer("Message")}</div>`);
+  const head = () => {
+    document.getElementById("rt").textContent = "# " + (room ? room.name : "");
+    document.getElementById("st").textContent = server ? server.name : "";
+    document.getElementById("mi").placeholder = room ? "Message #" + room.name : "Message";
+    try { draw(); } catch (e) {}
+  };
+  on(db.watchServer(sid, (s) => { server = s; head(); }));
   on(db.watchRooms(sid, (rs) => { room = rs.find((r) => r.id === rid) || null; head(); }));
   const box = document.getElementById("msgs");
   const draw = () => {
     const ms = list.filter((m) => !blocked[m.uid]);
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120 || !box.childElementCount;
-    if (!ms.length) { box.innerHTML = '<div class="none">No messages yet.<br>Say hi and start the chat! 👋</div>'; return; }
-    const html = msgsHtml(ms);
-    box.innerHTML = html;
-    box.__ms = ms;
+    const intro = room ? `<div class="dmintro top"><span class="hashbig">#</span><h2>Welcome to #${esc(room.name)}!</h2><p>This is the start of the <b>#${esc(room.name)}</b> room.</p></div>` : "";
+    box.innerHTML = intro + (ms.length ? msgsHtml(ms) : ""); box.__ms = ms;
     if (nearBottom) box.scrollTop = box.scrollHeight;
   };
   on(db.watchBlocked(user.uid, (b) => { blocked = b || {}; draw(); }));
   on(db.watchMessages(sid, rid, (ms) => { list = ms; draw(); }));
-  box.addEventListener("click", (e) => {
-    const el = e.target.closest(".msg"); if (!el || el.classList.contains("mine")) return;
-    const m = (box.__ms || [])[+el.dataset.i]; if (!m) return;
-    openSheet(m, sid, rid);
-  });
-  const input = document.getElementById("mi");
-  document.getElementById("cf").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = input.value.trim(); if (!text) return;
-    input.value = ""; input.focus();
-    try { await db.sendMessage(sid, rid, { uid: user.uid, name: user.name, text }); setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50); }
-    catch (x) { toast(x.message); input.value = text; }
-  });
+  wireMsgs(box, { kind: "room", sid, rid });
+  document.getElementById("mb").addEventListener("click", () => { if (server) openMembers(server, { kind: "room", sid, rid }); });
+  wireComposer((text) => db.sendMessage(sid, rid, { uid: user.uid, name: user.name, text }), box);
 }
 
-/* ---------- Direct messages ---------- */
+/* ---------- Direct message chat ---------- */
 function viewDM(id) {
   clearUnread("dm:" + id);
   let dm = null, blocked = {}, list = [];
   mount(`<div class="screen chat">
-    <div class="top"><a class="iconbtn" href="#/" aria-label="Back">${I.back}</a>
-      <div class="tt"><b id="rt">Message</b><span>Direct message</span></div></div>
+    <div class="top"><a class="iconbtn" href="#/dms" aria-label="Back">${I.back}</a>
+      <span id="ha"></span><div class="tt" style="margin-left:6px"><b id="rt">Message</b></div></div>
     <div class="msgs" id="msgs" role="log" aria-label="Messages"></div>
-    <div class="reqbar" id="rq" hidden></div>
-    <form class="composer" id="cf" autocomplete="off">
-      <label for="mi" style="position:absolute;left:-9999px">Message</label>
-      <input id="mi" placeholder="Message" maxlength="2000" enterkeyhint="send">
-      <button class="send" aria-label="Send" type="submit">${I.send}</button>
-    </form></div>`);
+    <div class="reqbar" id="rq" hidden></div>${composer("Message")}</div>`);
   const box = document.getElementById("msgs");
-  const other = () => dm ? (dm.members.find((x) => x !== user.uid)) : null;
+  const otherId = () => dm && dm.members.find((x) => x !== user.uid);
+  const otherName = () => { const o = otherId(); return o && dm.names ? (dm.names[o] || "Someone") : "Someone"; };
   const head = () => {
-    const o = other(); const nm = o && dm.names ? (dm.names[o] || "this person") : "this person";
-    document.getElementById("rt").textContent = o && dm.names ? (dm.names[o] || "Message") : "Message";
-    const rq = document.getElementById("rq"), cf = document.getElementById("cf"), mi = document.getElementById("mi");
+    const o = otherId(), nm = otherName();
+    document.getElementById("rt").textContent = o ? nm : "Message";
+    document.getElementById("ha").innerHTML = o ? avatar(o, nm, 34) : "";
+    document.getElementById("mi").placeholder = o ? "Message @" + nm : "Message";
+    const rq = document.getElementById("rq"), cf = document.getElementById("cf");
     if (dm && dm.status === "pending") {
       const mine = dm.requestedBy === user.uid;
       rq.hidden = false; cf.hidden = true;
       rq.innerHTML = mine ? `<p>Request sent ✅<br>You can chat once ${esc(nm)} accepts.</p>` : `<p><b>${esc(nm)}</b> wants to message you.</p><div class="acts"><button class="btn" id="ra" type="button">Accept</button><button class="btn ghost" id="rd" type="button">Decline</button></div>`;
       const ra = document.getElementById("ra"), rd = document.getElementById("rd");
       if (ra) ra.addEventListener("click", async () => { try { await db.acceptDM(id); toast("Accepted ✅"); } catch (x) { toast(x.message); } });
-      if (rd) rd.addEventListener("click", async () => { try { await db.declineDM(id); go("#/"); } catch (x) { toast(x.message); } });
+      if (rd) rd.addEventListener("click", async () => { try { await db.declineDM(id); go("#/dms"); } catch (x) { toast(x.message); } });
     } else if (dm) { rq.hidden = true; cf.hidden = false; }
     else { rq.hidden = true; cf.hidden = true; }
+    draw();
   };
   const draw = () => {
     const ms = list.filter((m) => !blocked[m.uid]);
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120 || !box.childElementCount;
-    if (!ms.length) { box.innerHTML = '<div class="none">No messages yet.<br>Say hi! 👋</div>'; return; }
+    if (!ms.length) {
+      const o = otherId();
+      box.innerHTML = o ? `<div class="dmintro">${avatar(o, otherName(), 72)}<h2>${esc(otherName())}</h2><p>This is the start of your direct messages with <b>${esc(otherName())}</b>.</p></div>` : "";
+      return;
+    }
     box.innerHTML = msgsHtml(ms); box.__ms = ms;
     if (nearBottom) box.scrollTop = box.scrollHeight;
   };
   on(db.watchDM(id, (d) => { dm = d; head(); }));
   on(db.watchBlocked(user.uid, (b) => { blocked = b || {}; draw(); }));
   on(db.watchDMMessages(id, (ms) => { list = ms; draw(); }));
-  box.addEventListener("click", (e) => {
-    const el = e.target.closest(".msg"); if (!el || el.classList.contains("mine")) return;
-    const m = (box.__ms || [])[+el.dataset.i]; if (!m) return;
-    openSheet(m, "dm", id);
-  });
-  const input = document.getElementById("mi");
-  document.getElementById("cf").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const text = input.value.trim(); if (!text) return;
-    input.value = ""; input.focus();
-    try { await db.sendDM(id, { uid: user.uid, name: user.name, text }); setTimeout(() => { box.scrollTop = box.scrollHeight; }, 50); }
-    catch (x) { toast(x.message); input.value = text; }
-  });
+  wireMsgs(box, { kind: "dm", id });
+  wireComposer((text) => db.sendDM(id, { uid: user.uid, name: user.name, text }), box);
 }
 
-/* ---------- Report / block sheet ---------- */
-function openSheet(m, sid, rid) {
+/* ---------- Sheets: message actions, profile card, members ---------- */
+function sheet(inner, cls = "") {
   const bg = document.createElement("div");
   bg.className = "sheetbg";
-  bg.innerHTML = `<div class="sheet" role="dialog" aria-label="Message options"><h3>${esc(m.name)}</h3><p class="quote">${esc(m.text)}</p>
-    ${sid !== "dm" ? `<button id="dmb">Message ${esc(m.name)}</button>` : ""}<button id="rp">Report this message</button><button id="bl" class="danger">Block ${esc(m.name)}</button><button id="cx" class="plain">Cancel</button></div>`;
+  bg.innerHTML = `<div class="sheet ${cls}" role="dialog">${inner}</div>`;
   $app.appendChild(bg);
   const close = () => bg.remove();
   bg.addEventListener("click", (e) => { if (e.target === bg) close(); });
-  bg.querySelector("#cx").addEventListener("click", close);
-  const dmb = bg.querySelector("#dmb");
-  if (dmb) dmb.addEventListener("click", async () => {
-    try { const id = await db.openDM(user.uid, user.name, m.uid, m.name); close(); go("#/dm/" + id); } catch (x) { toast(x.message); }
-  });
-  bg.querySelector("#rp").addEventListener("click", async () => {
-    try { await db.reportMessage({ reporterId: user.uid, messageUid: m.uid, messageName: m.name, text: m.text, messageId: m.id || "", serverId: sid, roomId: rid }); toast("Thanks, we'll look at it ✅"); }
+  return { bg, close, q: (s) => bg.querySelector(s) };
+}
+async function startDM(p) {
+  const id = await db.openDM(user.uid, user.name, p.uid, p.name);
+  go("#/dm/" + id);
+}
+function openSheet(m, ctx) {
+  const mine = m.uid === user.uid;
+  const s = sheet(`<div class="quote"><b>${esc(m.name)}</b><br>${esc(m.text)}</div>
+    <button id="cp">Copy text</button>
+    ${!mine && ctx.kind === "room" ? `<button id="dmb">Message ${esc(m.name)}</button>` : ""}
+    ${!mine ? `<button id="rp">Report message</button><button id="bl" class="danger">Block ${esc(m.name)}</button>` : ""}
+    <button id="cx" class="plain">Cancel</button>`);
+  s.q("#cx").addEventListener("click", s.close);
+  s.q("#cp").addEventListener("click", async () => { try { await navigator.clipboard.writeText(m.text); toast("Copied ✅"); } catch (e) { toast("Couldn't copy"); } s.close(); });
+  const dmb = s.q("#dmb");
+  if (dmb) dmb.addEventListener("click", async () => { s.close(); try { await startDM({ uid: m.uid, name: m.name }); } catch (x) { toast(x.message); } });
+  const rp = s.q("#rp");
+  if (rp) rp.addEventListener("click", async () => {
+    try { await db.reportMessage({ reporterId: user.uid, messageUid: m.uid, messageName: m.name, text: m.text, messageId: m.id || "", serverId: ctx.sid || "dm", roomId: ctx.rid || ctx.id || "" }); toast("Thanks, we'll look at it ✅"); }
     catch (x) { toast(x.message); }
-    close();
+    s.close();
   });
-  bg.querySelector("#bl").addEventListener("click", async () => {
-    try { await db.blockUser(user.uid, m.uid, m.name); toast(m.name + " is blocked. Their messages are hidden."); }
-    catch (x) { toast(x.message); }
-    close();
+  const bl = s.q("#bl");
+  if (bl) bl.addEventListener("click", async () => {
+    try { await db.blockUser(user.uid, m.uid, m.name); toast(m.name + " is blocked. Their messages are hidden."); } catch (x) { toast(x.message); }
+    s.close();
   });
+}
+function openProfile(p, ctx) {
+  const me = p.uid === user.uid, isBlocked = !!ntfBlocked[p.uid];
+  const s = sheet(`<div class="pbanner" style="background:${colorOf(p.uid)}"></div>
+    <div class="pav">${avatar(p.uid, p.name, 80)}</div>
+    <h3 class="pname">${esc(p.name)}</h3>
+    ${me ? '<p class="hint2">This is you</p>' : `<div class="pbtns">${ctx && ctx.kind === "dm" ? "" : '<button class="btn" id="pm" type="button">Message</button>'}
+      <button class="btn ghost" id="pb" type="button">${isBlocked ? "Unblock" : "Block"}</button></div>`}
+    <button id="cx" class="plain">Close</button>`, "prof");
+  s.q("#cx").addEventListener("click", s.close);
+  const pm = s.q("#pm");
+  if (pm) pm.addEventListener("click", async () => { s.close(); try { await startDM(p); } catch (x) { toast(x.message); } });
+  const pb = s.q("#pb");
+  if (pb) pb.addEventListener("click", async () => {
+    try { if (isBlocked) { await db.unblockUser(user.uid, p.uid); toast("Unblocked ✅"); } else { await db.blockUser(user.uid, p.uid, p.name); toast(p.name + " is blocked."); } } catch (x) { toast(x.message); }
+    s.close();
+  });
+}
+async function openMembers(server, ctx) {
+  const bg = document.createElement("div");
+  bg.className = "sheetbg right";
+  bg.innerHTML = `<aside class="drawer" aria-label="Members"><div class="dh"><b>Members</b><span>${server.members.length}</span></div><div class="dl" id="dl"><div class="hint">Loading…</div></div></aside>`;
+  $app.appendChild(bg);
+  bg.addEventListener("click", (e) => { if (e.target === bg) bg.remove(); });
+  await namesFor(server.members);
+  const ids = server.members.slice().sort((a, b) => (a === server.ownerId ? -1 : b === server.ownerId ? 1 : String(nameCache[a]).localeCompare(String(nameCache[b]))));
+  const dl = bg.querySelector("#dl"); if (!dl) return;
+  dl.innerHTML = `<div class="sec"><span>MEMBERS — ${ids.length}</span></div>` + ids.map((u) => `<button class="mrow" data-u="${esc(u)}">${avatar(u, nameCache[u], 40)}<span class="mn">${esc(nameCache[u] || "Someone")}</span>${u === server.ownerId ? '<em class="own">Owner</em>' : ""}</button>`).join("");
+  dl.querySelectorAll(".mrow").forEach((b) => b.addEventListener("click", () => { bg.remove(); openProfile({ uid: b.dataset.u, name: nameCache[b.dataset.u] || "Someone" }, ctx); }));
 }
 
 /* ---------- Create a server ---------- */
@@ -453,6 +549,7 @@ async function route() {
     return;
   }
   if (p[0] === "chat" && p[2]) return viewChat(p[1], p[2]);
+  if (p[0] === "dms") return viewDMs();
   if (p[0] === "dm" && p[1]) return viewDM(p[1]);
   if (p[0] === "create") return viewCreate();
   if (p[0] === "invite" && p[1]) return viewInvite(p[1]);

@@ -79,8 +79,9 @@ export const db = {
   dmId: (a, b) => [a, b].sort().join("_"),
   openDM: wrap(async (u, uName, other, otherName) => {
     const id = [u, other].sort().join("_");
-    const ex = await getDoc(doc(fs, "dms", id));
-    if (!ex.exists()) await setDoc(doc(fs, "dms", id), { members: [u, other].sort(), names: { [u]: uName, [other]: otherName }, status: "pending", requestedBy: u, updatedAt: serverTimestamp() });
+    let exists = false;
+    try { exists = (await getDoc(doc(fs, "dms", id))).exists(); } catch (e) { exists = false; }
+    if (!exists) await setDoc(doc(fs, "dms", id), { members: [u, other].sort(), names: { [u]: uName, [other]: otherName }, status: "pending", requestedBy: u, updatedAt: serverTimestamp() });
     return id;
   }),
   acceptDM: wrap((id) => updateDoc(doc(fs, "dms", id), { status: "accepted", updatedAt: serverTimestamp() })),
